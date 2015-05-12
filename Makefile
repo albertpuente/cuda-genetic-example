@@ -9,8 +9,11 @@ genetic: genetic.c
 geneticViewer: geneticViewer.c
 	gcc geneticViewer.c -o geneticViewer $(CFLAGS) $(GFLAGS)
 	
-exec:	genetic geneticViewer
+show:	genetic geneticViewer
 	./genetic > data && ./geneticViewer data
 
+exec:	genetic geneticViewer
+	./genetic exec
+	
 clean:
 	rm *.o genetic geneticViewer

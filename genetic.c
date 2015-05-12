@@ -37,9 +37,6 @@ Albert Puente Encinas
 #define MAX_DELTA 2
 #define MAX_TRIES 1e4   // max amount of times we try to find a position for a point
 
-// Output toggles
-#define DUMP true  // Write output for the viewer
-
 // Deterministic algorithm (testing purposes)
 #define SEED 27
 # define RAND01 ((float)rand()/(float)(RAND_MAX))
@@ -48,6 +45,9 @@ Albert Puente Encinas
 typedef int bool;
 #define true 1
 #define false 0
+
+// Output toggles
+bool DUMP;
 
 typedef struct {
     float x, y, z; // Position
@@ -328,7 +328,7 @@ void progressAnim(int it) {
     printf(" %i%%\n", it*100/ITERATION_LIMIT);
 }
 
-void dumpInitialParams() {
+void DUMPInitialParams() {
     printf("%i %i\n", N_POINTS, ITERATION_LIMIT);
 }
 
@@ -347,7 +347,7 @@ void sequentialGenetic() {
         printf("ERROR: Failed to allocate %i KB.\n", 2*sizeof(Population)/1024);
         exit(EXIT_FAILURE);
     }
-    if (DUMP) dumpInitialParams();
+    if (DUMP) DUMPInitialParams();
     generateInitialPopulation(P);
     
     int it = 0;
@@ -387,7 +387,7 @@ void cudaGenetic() {
         printf("ERROR: Failed to allocate %i KB (HOST).\n", sizeof(Population)/1024);
         exit(EXIT_FAILURE);
     }
-    if (DUMP) dumpInitialParams();
+    if (DUMP) DUMPInitialParams();
     
     generateInitialPopulation(P);
     
@@ -408,6 +408,9 @@ void cudaGenetic() {
 //
 
 int main(int argc, char** argv) {
+    
+    DUMP = (argc == 1);
+    
     sequentialGenetic();
     cudaGenetic();
     return 0;
