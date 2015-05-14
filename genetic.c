@@ -26,16 +26,20 @@ Albert Puente Encinas
 
 // Genetic algorithm parameters
 #define N 512
-#define N_POINTS 400
-#define ITERATION_LIMIT 1000
+#define N_POINTS 200
+#define ITERATION_LIMIT 2000
 #define GOAL_SCORE -1.0
-#define POINT_SET_MUTATION_PROB 0.3
-#define POINT_MUTATION_PROB 0.1
+#define POINT_SET_MUTATION_PROB 0.5
+#define POINT_MUTATION_PROB 0.01
 #define N_SURVIVORS N/4
-#define COLLISION_DISTANCE 0.2
-#define OBSTACLE_SIZE 2.0
+#define POINT_RADIUS 0.25
+#define OBSTACLE_RADIUS 2.0
 #define MAX_DELTA 2
-#define MAX_TRIES 1e4   // max amount of times we try to find a position for a point
+#define MAX_TRIES 1e3   // max amount of times we try to find a position for a point
+
+// Obstacles
+#define CHECK_OBSTACLES true
+#define CHECK_COLLISIONS true
 
 // Deterministic algorithm (testing purposes)
 #define SEED 27
@@ -63,6 +67,14 @@ typedef struct {
     float maxScore;
 } Population;
 
+typedef struct {
+    Point centre;
+    float radius;
+} Obstacle;
+
+#define N_OBSTACLES 1
+Obstacle obstacles[N_OBSTACLES];
+
 inline bool randomChoice(float probability) {
     if ((float)rand()/(float)(RAND_MAX) <= probability) return true;
     else return false;
@@ -74,20 +86,23 @@ inline float dist(Point* a, Point* b) {
 
 
 Point destination;
-Point obstacle;
 
 // checks whether the point p collides with any of the points in between
 // PS[from] and PS[to], 'to' not included.
 bool collides(Point* p, PointSet* PS, int from, int to) {
-    for (int i = from; i < to; ++i) {
-        if (dist(p, &PS->points[i]) < COLLISION_DISTANCE) {
-            return true;
+    if (CHECK_COLLISIONS)
+        for (int i = from; i < to; ++i) {
+            if (dist(p, &PS->points[i]) < POINT_RADIUS*2) {
+                return true;
+            }
         }
-    }
-    if (dist(p, &obstacle) < OBSTACLE_SIZE) {
-        return true;
-    }
-    
+    if (CHECK_OBSTACLES)
+        for (int i = 0; i < N_OBSTACLES; ++i) {
+            Obstacle o = obstacles[i];
+            if (dist(p, &o.centre) < POINT_RADIUS + o.radius) {
+                return true;
+            }
+        }
     return false;
 }
 
@@ -111,19 +126,20 @@ bool collides(PointSet* PS, PointSet* QS, int ixq, int ixp) {
 }
 */
 
-void generateInitialPopulation(Population* P) {    
+void generateInitialPopulation(Population* P) {
+    float range = POINT_RADIUS * pow((float)N_POINTS, 1.0/3.0) * 10;
     for (int i = 0; i < N; ++i) {
         for (int j = 0; j < N_POINTS; ++j) {
             PointSet* PS = &(P->pointSets[i]);
             Point* p = &(PS->points[j]); // p is passed to 'collides' via PS
-            p->x = (float)rand()/(float)(RAND_MAX/5.0) + 12.5;
-            p->y = (float)rand()/(float)(RAND_MAX/5.0) + 12.5;
-            p->z = (float)rand()/(float)(RAND_MAX/5.0) + 12.5;
+            p->x = (float)rand()/(float)(RAND_MAX/range) + 12.5; //kappa
+            p->y = (float)rand()/(float)(RAND_MAX/range) + 12.5;
+            p->z = (float)rand()/(float)(RAND_MAX/range) + 12.5;
             
             int try = 0;
             while (try < MAX_TRIES && collides(p, PS, 0, j)) {
-                p->x = (float)rand()/(float)(RAND_MAX/5.0) + 12.5;
-                p->y = (float)rand()/(float)(RAND_MAX/5.0) + 12.5;
+                p->x = (float)rand()/(float)(RAND_MAX/range) + 12.5;
+                p->y = (float)rand()/(float)(RAND_MAX/range) + 12.5;
                 p->z = (float)rand()/(float)(RAND_MAX/5.0) + 12.5;
                 ++try;
             }
@@ -142,9 +158,7 @@ inline float heur_1(Point* P) {
 
 
 inline float heur_2(Point* P) {
-    float s = dist(P, &destination);
-    if (s < OBSTACLE_SIZE * 1.1) s = 0.0;
-    return s;
+    return dist(P, &destination);
 }
 
 void evaluate(Population* P) {
@@ -329,16 +343,20 @@ void progressAnim(int it) {
 }
 
 void DUMPInitialParams() {
+    printf("%i\n", N_OBSTACLES);
+    for (int i = 0; i < N_OBSTACLES; ++i) {
+        Obstacle o = obstacles[i];
+        printf("%f %f %f %f\n", o.centre.x, o.centre.y, o.centre.z, o.radius); 
+    }
     printf("%i %i\n", N_POINTS, ITERATION_LIMIT);
+    
 }
 
 void sequentialGenetic() {
     
     srand(SEED);
     
-    destination.x = destination.y = destination.z = 0.0;
-    obstacle = destination;
-    
+    destination.x = destination.y = destination.z = 0.0;    
     
     Population* P = malloc(sizeof(Population));
     Population* Q = malloc(sizeof(Population));
@@ -405,12 +423,19 @@ void cudaGenetic() {
     // 
 }
 
-//
+void initObstacles() {
+    Point origin;
+    origin.x = origin.y = origin.z = 0;
+    
+    obstacles[0].centre = origin;
+    obstacles[0].radius = 2.0;
+    
+}
 
 int main(int argc, char** argv) {
     
     DUMP = (argc == 1);
-    
+    initObstacles();
     sequentialGenetic();
     cudaGenetic();
     return 0;

@@ -32,6 +32,14 @@ Albert Puente Encinas
 // Genetic algorithm parameters
 int nPoints;
 int itLimit;
+int nObstacles;
+
+typedef struct {
+    float x, y, z;
+    float radius;
+} Obstacle;
+
+Obstacle* obstacles; 
 
 #define FPS 60.0;   // Viewer maximum framerate
 
@@ -66,12 +74,17 @@ void loadShaders() {
    
     GLuint fsh = glCreateShader(GL_FRAGMENT_SHADER);
     
+    /*
+     * -20<= pos[i] <=20 
+     * 0 <=r,g, b <= 1.0  
+     * 
+     */
     char* fshcode = "\
         varying vec3 pos;\
         void main() {\
-            float r = (pos[0]+10.0)/20.0;\
-            float g = (pos[1]+10.0)/20.0;\
-            float b = (pos[2]+10.0)/20.0;\
+            float r = 1 - abs(pos[0]/20.0); \
+            float g = 1 - abs(pos[1]/20.0); \
+            float b = 1 - abs(pos[2]/20.0); \
             gl_FragColor = vec4(r,g,b,1.0);\
         }";
         
@@ -177,12 +190,27 @@ void drawAxis() {
     glPopMatrix(); 
 }
 
+void drawObstacles() {
+    glPushMatrix();
+    glScalef(scale, scale, scale);
+    glColor3f(1.0, 0.0, 0.0);
+    for (int i = 0; i < nObstacles; ++i) {
+        glPushMatrix();
+        Obstacle* o = &obstacles[i];
+        glTranslatef(o->x, o->y, o->z);
+        glutSolidSphere(o->radius, 20, 20);
+        glPopMatrix();
+    }
+    glPopMatrix();
+}
+
 void refresh() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     drawText();
     glUseProgram(sProgram);
     drawPoints();
     glUseProgram(0);
+    drawObstacles();
     drawAxis();
     glutSwapBuffers();
 }
@@ -314,8 +342,17 @@ void open3DWindow(int argc, char** argv) {
 }
 
 int readFile(char* name) {
-    FILE* file = fopen(name, "r");    
+    FILE* file = fopen(name, "r");   
+
+    fscanf(file, "%i\n", &nObstacles);
+    obstacles = malloc(nObstacles*sizeof(Obstacle));    
+    for (int i = 0; i < nObstacles; ++i) {
+        Obstacle* o = &obstacles[i];
+        fscanf(file, "%f %f %f %f\n", &o->x, &o->y, &o->z, &o->radius); 
+    }    
+    
     fscanf(file, "%i", &nPoints);
+
     fscanf(file, "%i", &itLimit);
     
     V = malloc(3*sizeof(float)*(itLimit+1)*nPoints);
