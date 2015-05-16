@@ -52,6 +52,17 @@ typedef int bool;
 float* V;
 int Vid;
 
+// Colours
+float colours[] = { 
+    1, 0, 0,
+    0, 1, 0,
+    0, 0, 1,
+    1, 1, 0,
+    1, 0, 1,
+    0, 1, 1,
+    1, 1, 1};
+                
+
 // OpenGL shader program
 GLuint sProgram;
 
@@ -191,10 +202,31 @@ void drawAxis() {
 }
 
 void drawObstacles() {
+    glEnable(GL_LIGHTING);
+    
     glPushMatrix();
     glScalef(scale, scale, scale);
-    glColor3f(1.0, 0.0, 0.0);
+    
+    int nColours = sizeof(colours)/sizeof(float);
+    
+    float lightPos[4] = {20, 20, 20, 1};
+    glLightfv(GL_LIGHT0, GL_POSITION, lightPos);
+    
     for (int i = 0; i < nObstacles; ++i) {
+        
+        float r = colours[(3*i)%nColours];
+        float g = colours[(3*i+1)%nColours];
+        float b = colours[(3*i+2)%nColours];
+        
+        float v1[3] = {r*0.8, g*0.8, b*0.8};
+        glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, v1);
+        float v2[3] = {r, g, b};
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, v2);
+        float v3[3] = {r*0.2, g*0.2, b*0.2};
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, v3);
+        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 5);
+        
+        
         glPushMatrix();
         Obstacle* o = &obstacles[i];
         glTranslatef(o->x, o->y, o->z);
@@ -202,6 +234,7 @@ void drawObstacles() {
         glPopMatrix();
     }
     glPopMatrix();
+    glDisable(GL_LIGHTING);
 }
 
 void refresh() {
@@ -211,7 +244,7 @@ void refresh() {
     drawPoints();
     glUseProgram(0);
     drawObstacles();
-    drawAxis();
+    //drawAxis();
     glutSwapBuffers();
 }
 
@@ -320,6 +353,18 @@ void initGL() {
     glEnable(GL_SMOOTH);
     
     glDisable(GL_LIGHTING);
+    
+    float v01[3] = { 0.8, 0.8, 0.8};
+    glLightfv(GL_LIGHT0, GL_DIFFUSE, v01);
+    float v02[3] = { 0.3, 0.3, 0.3};
+    glLightfv(GL_LIGHT0, GL_AMBIENT, v02);
+    float v03[3] = { 1, 1, 1};
+    glLightfv(GL_LIGHT0, GL_SPECULAR, v03);
+    glEnable(GL_LIGHT0);
+    
+    glEnable(GL_NORMALIZE); 
+    glEnable(GL_SMOOTH);
+    
     glEnable(GL_POINT_SMOOTH);
     glHint(GL_POINT_SMOOTH_HINT, GL_NICEST);
         
@@ -350,7 +395,6 @@ int readFile(char* name) {
         Obstacle* o = &obstacles[i];
         fscanf(file, "%f %f %f %f\n", &o->x, &o->y, &o->z, &o->radius); 
     }    
-    
     fscanf(file, "%i", &nPoints);
 
     fscanf(file, "%i", &itLimit);
