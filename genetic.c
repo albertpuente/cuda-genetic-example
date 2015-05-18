@@ -26,9 +26,9 @@ Albert Puente Encinas
 #include <sys/time.h>
 
 // Genetic algorithm parameters
-#define N 4096
-#define N_POINTS 1024
-#define ITERATION_LIMIT 10
+#define N 1024
+#define N_POINTS 128
+#define ITERATION_LIMIT 2000
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
 #define POINT_MUTATION_PROB 0.01
@@ -62,7 +62,7 @@ unsigned long long totalTime;
 inline void tic(unsigned long long* time) {
     struct timeval t;
     gettimeofday(&t, NULL);
-    *time = t.tv_sec*1000000 + t.tv_usec;
+    *time = t.tv_sec*1000000 + t.tv_usec - *time;
     
 }
 

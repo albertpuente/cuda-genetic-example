@@ -7,7 +7,8 @@ genetic: genetic.c
 	gcc genetic.c -o genetic $(CFLAGS)
 
 geneticViewer: geneticViewer.c
-	gcc geneticViewer.c -o geneticViewer $(CFLAGS) $(GFLAGS)
+	gcc geneticViewer.c -o geneticViewer $(CFLAGS) $(GFLAGS) 
+	# -L/System/Library/Frameworks -framework GLUT -framework OpenGL$
 	
 show:	genetic geneticViewer
 	./genetic > data && ./geneticViewer data
@@ -16,4 +17,4 @@ exec:	genetic geneticViewer
 	./genetic exec
 	
 clean:
-	rm *.o genetic geneticViewer
+	rm *.o genetic geneticViewer	

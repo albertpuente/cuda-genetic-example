@@ -21,9 +21,13 @@ Andrés Mingorance López
 Albert Puente Encinas
   
 */
-
+#ifndef MACOS
+#include <OpenGL/gl.h>
+#include <GLUT/glut.h>
+#else 
 #include <GL/gl.h>
 #include <GL/freeglut.h>
+#endif
 
 #include <stdio.h>  // e.g. printf
 #include <stdlib.h> // e.g. malloc, RAND_MAX
