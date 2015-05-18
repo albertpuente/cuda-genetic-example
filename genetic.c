@@ -19,15 +19,16 @@ Jan Mas Rovira
 Andrés Mingorance López
 Albert Puente Encinas
 */
- 
+
 #include <stdio.h>  // e.g. printf
 #include <stdlib.h> // e.g. malloc, RAND_MAX, exit
 #include <math.h>   // e.g. sin, abs
+#include <sys/time.h>
 
 // Genetic algorithm parameters
-#define N 512
-#define N_POINTS 200
-#define ITERATION_LIMIT 2000
+#define N 4096
+#define N_POINTS 1024
+#define ITERATION_LIMIT 10
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
 #define POINT_MUTATION_PROB 0.01
@@ -49,6 +50,27 @@ Albert Puente Encinas
 typedef int bool;
 #define true 1
 #define false 0
+
+// Timers
+unsigned long long mutationTime;
+unsigned long long reproductionTime;
+unsigned long long sortingTime;
+unsigned long long evaluationTime;
+unsigned long long initialGenTime;
+unsigned long long totalTime;
+
+inline void tic(unsigned long long* time) {
+    struct timeval t;
+    gettimeofday(&t, NULL);
+    *time = t.tv_sec*1000000 + t.tv_usec;
+    
+}
+
+inline void toc(unsigned long long* time) {
+    struct timeval t;
+    gettimeofday(&t, NULL);
+    *time = t.tv_sec*1000000 + t.tv_usec - *time;
+}
 
 // Output toggles
 bool DUMP;
@@ -127,6 +149,8 @@ bool collides(PointSet* PS, PointSet* QS, int ixq, int ixp) {
 */
 
 void generateInitialPopulation(Population* P) {
+    tic(&initialGenTime);
+    
     float range = POINT_RADIUS * pow((float)N_POINTS, 1.0/3.0) * 10;
     for (int i = 0; i < N; ++i) {
         for (int j = 0; j < N_POINTS; ++j) {
@@ -150,6 +174,8 @@ void generateInitialPopulation(Population* P) {
             //P->pointSets[i].points[j] = p;
         }
     }
+    
+    toc(&initialGenTime);
 }
 
 inline float heur_1(Point* P) {
@@ -162,6 +188,8 @@ inline float heur_2(Point* P) {
 }
 
 void evaluate(Population* P) {
+    tic(&evaluationTime);
+    
     for (int i = 0; i < N; ++i) {
         PointSet* C = &P->pointSets[i];
         C->score = 0;
@@ -170,6 +198,8 @@ void evaluate(Population* P) {
             C->score += heur_2(E);
         } 
     }    
+    
+    toc(&evaluationTime);
 }
 
 int cmpScores(const void* a, const void* b) { 
@@ -180,8 +210,12 @@ int cmpScores(const void* a, const void* b) {
 }
 
 void sort(Population* P) {
+    tic(&sortingTime);
+    
     qsort(P->pointSets, N, sizeof(PointSet), cmpScores);
     P->maxScore = P->pointSets[0].score;
+    
+    toc(&sortingTime);
 }
 
 void mix(PointSet* AP, PointSet* AQ) {
@@ -279,6 +313,8 @@ void randomMove(PointSet* AP, PointSet* AQ) {
 // Q = mutation of the X% best portion of P
 // llegeix de P, escriu a Q
 void mutate(Population* P, Population* Q) {
+    tic(&mutationTime);
+    
     for (int i = 0; i < N; ++i) {
         PointSet* AP = &P->pointSets[i];    // original points
         PointSet* AQ = &Q->pointSets[i];    // mutated points
@@ -295,12 +331,8 @@ void mutate(Population* P, Population* Q) {
             *AQ = *AP;
         }
     }
-}
-
-void swap(Population** a, Population** b) {
-   Population* c = *a;
-   *a = *b;
-   *b = c;  
+    
+    toc(&mutationTime);
 }
 
 void dump(PointSet* C) {
@@ -322,7 +354,9 @@ void pork(PointSet* p1, PointSet* p2, PointSet* child) {
 }
 
 void reproduce(Population* P, Population* Q) {
-    int i;    
+    tic(&reproductionTime);
+    
+    int i;
     for (i = 0; i < N_SURVIVORS; ++i) {
         Q->pointSets[i] = P->pointSets[i];
     }
@@ -332,7 +366,9 @@ void reproduce(Population* P, Population* Q) {
         PointSet* p2 = &P->pointSets[rand()%N_SURVIVORS];        
         PointSet* child = &Q->pointSets[i];
         pork(p1, p2, child);
-    }    
+    }
+    
+    toc(&reproductionTime);
 }
 
 void progressAnim(int it) {
@@ -352,7 +388,22 @@ void DUMPInitialParams() {
     
 }
 
+void initTimes() {
+    initialGenTime = mutationTime = evaluationTime = sortingTime = reproductionTime = 0;
+}
+
+void printTimes() {
+    printf("Sequential genetic algorithm has finished:\n");
+    printf("    Init gen:     %f s.\n", (double)initialGenTime/1000000);
+    printf("    Mutations:    %f s.\n", (double)mutationTime/1000000);
+    printf("    Evaluations:  %f s.\n", (double)evaluationTime/1000000);
+    printf("    Sorting:      %f s.\n", (double)sortingTime/1000000);
+    printf("    Reproduction: %f s.\n", (double)reproductionTime/1000000);
+    printf("    Total time:   %f s.\n", (double)totalTime/1000000);
+}
+
 void sequentialGenetic() {
+    tic(&totalTime);
     
     srand(SEED);
     
@@ -366,6 +417,8 @@ void sequentialGenetic() {
         exit(EXIT_FAILURE);
     }
     if (DUMP) DUMPInitialParams();
+    else initTimes();
+    
     generateInitialPopulation(P);
     
     int it = 0;
@@ -392,7 +445,9 @@ void sequentialGenetic() {
         it++;
     }
     
-    if (!DUMP) printf("Sequential genetic algorithm has finished.\n");
+    toc(&totalTime);
+    
+    if (!DUMP) printTimes();
 }
 
 // CUDA
