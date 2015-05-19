@@ -29,7 +29,7 @@ berry:	geneticCUDA
 	./geneticCUDA 1
 	
 clean:
-	rm *.o genetic geneticCUDA geneticViewer 
+	rm *.o genetic geneticCUDA SESION* # geneticViewer 
 	
 cuda.o: genetic.cu
 	$(NVCC) -c -o $@ genetic.cu $(NVCC_FLAGS)

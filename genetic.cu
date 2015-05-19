@@ -408,7 +408,7 @@ void sequentialGenetic() {
     Population* Q = (Population*) malloc(sizeof(Population));
     
     if (P == NULL || Q == NULL) {
-        printf("ERROR: Failed to allocate %i KB.\n", 2*sizeof(Population)/1024);
+        printf("ERROR: Failed to allocate %lu KB.\n", 2*sizeof(Population)/1024);
         exit(EXIT_FAILURE);
     }
     if (DUMP) DUMPInitialParams();
