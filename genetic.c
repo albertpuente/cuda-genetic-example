@@ -27,7 +27,7 @@ Albert Puente Encinas
 
 // Genetic algorithm parameters
 #define N 1024
-#define N_POINTS 128
+#define N_POINTS 512
 #define ITERATION_LIMIT 2000
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
@@ -65,12 +65,7 @@ inline void tic(unsigned long long* time) {
     *time = t.tv_sec*1000000 + t.tv_usec - *time;
     
 }
-
-inline void toc(unsigned long long* time) {
-    struct timeval t;
-    gettimeofday(&t, NULL);
-    *time = t.tv_sec*1000000 + t.tv_usec - *time;
-}
+#define toc tic
 
 // Output toggles
 bool DUMP;
@@ -94,7 +89,7 @@ typedef struct {
     float radius;
 } Obstacle;
 
-#define N_OBSTACLES 4
+#define N_OBSTACLES 27
 Obstacle obstacles[N_OBSTACLES];
 
 inline bool randomChoice(float probability) {
@@ -479,32 +474,20 @@ void cudaGenetic() {
 }
 
 void initObstacles() {
-    Point origin;
-    origin.x = origin.y = origin.z = 0;
     
-    obstacles[0].centre = origin;
-    obstacles[0].radius = 2.0;
-    
-    Point p2;
-    p2.x = p2.y = p2.z = 2;
-    
-    obstacles[1].centre = p2;
-    obstacles[1].radius = 2.0;
-    
-    Point p3;
-    p3.x = 4;
-    p3.y = p3.z = 2;
-    
-    obstacles[2].centre = p3;
-    obstacles[2].radius = 3.0;
-    
-    Point p4;
-    p4.x = p4.y = 2;
-    p4.z = 4;
-    
-    obstacles[3].centre = p4;
-    obstacles[3].radius = 1.0;
-    
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            for (int k = 0; k < 3; ++k) {
+                Point origin;
+                origin.x = 3*i;
+                origin.y = 3*j;
+                origin.z = 3*k;
+
+                obstacles[i*9 + j*3 + k].centre = origin;
+                obstacles[i*9 + j*3 + k].radius = 1.0;
+            }
+        }
+    }    
 }
 
 int main(int argc, char** argv) {

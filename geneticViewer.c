@@ -21,13 +21,8 @@ Andrés Mingorance López
 Albert Puente Encinas
   
 */
-#ifndef MACOS
-#include <OpenGL/gl.h>
-#include <GLUT/glut.h>
-#else 
 #include <GL/gl.h>
 #include <GL/freeglut.h>
-#endif
 
 #include <stdio.h>  // e.g. printf
 #include <stdlib.h> // e.g. malloc, RAND_MAX
@@ -226,7 +221,7 @@ void drawObstacles() {
         glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, v1);
         float v2[3] = {r, g, b};
         glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, v2);
-        float v3[3] = {r*0.2, g*0.2, b*0.2};
+        float v3[3] = {r*0.7, g*0.7, b*0.7};
         glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, v3);
         glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 5);
         
@@ -234,7 +229,7 @@ void drawObstacles() {
         glPushMatrix();
         Obstacle* o = &obstacles[i];
         glTranslatef(o->x, o->y, o->z);
-        glutSolidSphere(o->radius, 20, 20);
+        glutSolidSphere(o->radius, 10, 10);
         glPopMatrix();
     }
     glPopMatrix();

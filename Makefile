@@ -8,7 +8,6 @@ genetic: genetic.c
 
 geneticViewer: geneticViewer.c
 	gcc geneticViewer.c -o geneticViewer $(CFLAGS) $(GFLAGS) 
-	# -L/System/Library/Frameworks -framework GLUT -framework OpenGL$
 	
 show:	genetic geneticViewer
 	./genetic > data && ./geneticViewer data
