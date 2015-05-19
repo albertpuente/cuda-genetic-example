@@ -1,4 +1,4 @@
-all: genetic geneticViewer cuda
+all: genetic cuda # geneticViewer
 
 # CUDA
 CUDA_HOME   = /Soft/cuda/6.5.14
@@ -19,20 +19,23 @@ geneticViewer: geneticViewer.c
 show:	genetic geneticViewer
 	./genetic > data && ./geneticViewer data
 
-exec:	genetic geneticViewer
+exec:	genetic
 	./genetic 1
 	
 potato:	geneticCUDA geneticViewer
 	./geneticCUDA > data && ./geneticViewer data
 
-berry:	geneticCUDA geneticViewer
+berry:	geneticCUDA
 	./geneticCUDA 1
 	
 clean:
 	rm *.o genetic geneticCUDA geneticViewer 
 	
-cudaobj: genetic.cu
+cuda.o: genetic.cu
 	$(NVCC) -c -o $@ genetic.cu $(NVCC_FLAGS)
 
-cuda:	cudaobj
-	$(NVCC) genetic.o -o geneticCUDA $(LD_FLAGS)
+cuda:	cuda.o
+	$(NVCC) cuda.o -o geneticCUDA $(LD_FLAGS)
+
+sub:	cuda
+	qsub -l cuda job.sh && watch -n 0.5 qstat

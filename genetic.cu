@@ -36,7 +36,7 @@ Albert Puente Encinas
 #define POINT_RADIUS 0.25
 #define OBSTACLE_RADIUS 2.0
 #define MAX_DELTA 2
-#define MAX_TRIES 1e3   // max amount of times we try to find a position for a point
+#define MAX_TRIES 1e3   // max amount of times we tries to find a position for a point
 
 // Obstacles
 #define CHECK_OBSTACLES true
@@ -47,7 +47,7 @@ Albert Puente Encinas
 # define RAND01 ((float)rand()/(float)(RAND_MAX))
 
 // c++ style
-typedef int bool;
+#define bool int
 #define true 1
 #define false 0
 
@@ -155,14 +155,14 @@ void generateInitialPopulation(Population* P) {
             p->y = (float)rand()/(float)(RAND_MAX/range) + 12.5;
             p->z = (float)rand()/(float)(RAND_MAX/range) + 12.5;
             
-            int try = 0;
-            while (try < MAX_TRIES && collides(p, PS, 0, j)) {
+            int tries = 0;
+            while (tries < MAX_TRIES && collides(p, PS, 0, j)) {
                 p->x = (float)rand()/(float)(RAND_MAX/range) + 12.5;
                 p->y = (float)rand()/(float)(RAND_MAX/range) + 12.5;
                 p->z = (float)rand()/(float)(RAND_MAX/5.0) + 12.5;
-                ++try;
+                ++tries;
             }
-            if (try == MAX_TRIES) {
+            if (tries == MAX_TRIES) {
                 printf("Error during the generation of the initial population\n");
                 exit(1);
             }
@@ -222,9 +222,9 @@ void mix(PointSet* AP, PointSet* AQ) {
             continue;
         }           
    
-        int try = 0;
+        int tries = 0;
         Point p;
-        while (try < MAX_TRIES) {            
+        while (tries < MAX_TRIES) {            
             // Choose a reference point
             int j = rand()%N_POINTS;
             
@@ -264,9 +264,9 @@ void mix(PointSet* AP, PointSet* AQ) {
                 // (this 2nd check prevents inconsistencies like a point being unable to move at all)
                 !collides(&p, AP, i + 1, N_POINTS))
                     break;
-            ++try;
+            ++tries;
         }
-        if (try == MAX_TRIES) {
+        if (tries == MAX_TRIES) {
             //printf("Error during the mix() of points\n");
             //exit(1);
             p = AP->points[i];
@@ -282,9 +282,9 @@ void randomMove(PointSet* AP, PointSet* AQ) {
             AQ->points[i] = AP->points[i];
             continue;
         }
-        int try = 0;
+        int tries = 0;
         Point p;
-        while (try < MAX_TRIES) {
+        while (tries < MAX_TRIES) {
             p.x = AP->points[i].x + (RAND01-0.5)*2*MAX_DELTA;
             p.y = AP->points[i].y + (RAND01-0.5)*2*MAX_DELTA;
             p.z = AP->points[i].z + (RAND01-0.5)*2*MAX_DELTA;
@@ -294,9 +294,9 @@ void randomMove(PointSet* AP, PointSet* AQ) {
                 // (this 2nd check prevents inconsistencies like a point being unable to move at all)
                 !collides(&p, AP, i + 1, N_POINTS))
                     break;
-            ++try;
+            ++tries;
         }
-        if (try == MAX_TRIES) {
+        if (tries == MAX_TRIES) {
             //printf("Error during the mix() of points\n");
             //exit(1);
             p = AP->points[i];
@@ -404,8 +404,8 @@ void sequentialGenetic() {
     
     destination.x = destination.y = destination.z = 0.0;    
     
-    Population* P = malloc(sizeof(Population));
-    Population* Q = malloc(sizeof(Population));
+    Population* P = (Population*) malloc(sizeof(Population));
+    Population* Q = (Population*) malloc(sizeof(Population));
     
     if (P == NULL || Q == NULL) {
         printf("ERROR: Failed to allocate %i KB.\n", 2*sizeof(Population)/1024);
