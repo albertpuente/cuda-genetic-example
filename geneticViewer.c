@@ -52,13 +52,14 @@ float* V;
 int Vid;
 
 // Colours
+#define factor 0.3
 float colours[] = { 
-    1, 0, 0,
-    0, 1, 0,
-    0, 0, 1,
-    1, 1, 0,
-    1, 0, 1,
-    0, 1, 1,
+    1, factor, factor,
+    factor, 1, factor,
+    factor, factor, 1,
+    1, 1, factor,
+    1, factor, 1,
+    factor, 1, 1,
     1, 1, 1};
                 
 
@@ -229,7 +230,7 @@ void drawObstacles() {
         glPushMatrix();
         Obstacle* o = &obstacles[i];
         glTranslatef(o->x, o->y, o->z);
-        glutSolidSphere(o->radius, 10, 10);
+        glutSolidSphere(o->radius, 100, 100);
         glPopMatrix();
     }
     glPopMatrix();

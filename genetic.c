@@ -27,8 +27,8 @@ Albert Puente Encinas
 
 // Genetic algorithm parameters
 #define N 1024
-#define N_POINTS 512
-#define ITERATION_LIMIT 2000
+#define N_POINTS 64
+#define ITERATION_LIMIT 1000
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
 #define POINT_MUTATION_PROB 0.01
@@ -445,34 +445,6 @@ void sequentialGenetic() {
     if (!DUMP) printTimes();
 }
 
-// CUDA
-
-void cudaGenetic() {
-    
-    Population* P = malloc(sizeof(Population));
-    
-    if (P == NULL) {
-        printf("ERROR: Failed to allocate %i KB (HOST).\n", sizeof(Population)/1024);
-        exit(EXIT_FAILURE);
-    }
-    if (DUMP) DUMPInitialParams();
-    
-    generateInitialPopulation(P);
-    
-    // STEPS (idea)
-    // 1. Copy the initial population to the device...
-    //          1 thread for each entity => N threads 
-    //          N/4 threads for each GPU (Multi GPU)
-    // 2. After each copy, its "mutate" kernel can be called (STREAMS)
-    // 3. Each "mutate" kernel creates his own "evaluate" kernel 
-    //    after mutating (Dynamic parallelism)
-    // 4. Launch cuda quicksort over the population
-    // 5. Copy the maximum score to the CPU (if OK or it > ITERATION_LIMIT then GOTO )
-    // 6. CPU calls copy CPU calls "reproduce" kernels at random elements.
-    // ...
-    // 
-}
-
 void initObstacles() {
     
     for (int i = 0; i < 3; ++i) {
@@ -491,11 +463,9 @@ void initObstacles() {
 }
 
 int main(int argc, char** argv) {
-    
     DUMP = (argc == 1);
     initObstacles();
     sequentialGenetic();
-    cudaGenetic();
     return 0;
 }
 
