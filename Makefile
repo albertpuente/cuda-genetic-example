@@ -36,4 +36,7 @@ cuda:	cuda.o
 	$(NVCC) cuda.o -o geneticCUDA $(LD_FLAGS)
 
 sub:	cuda
+	rm -f SESION*
 	qsub -l cuda job.sh && watch -n 0.5 qstat
+	
+	

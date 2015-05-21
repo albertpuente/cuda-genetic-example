@@ -183,24 +183,26 @@ __global__ void kernel_generateInitialPopulation(Population* P,
     
     float range = POINT_RADIUS * pow((float)N_POINTS, 1.0f/3.0f) * 10;    
     
+    /*
     float r1 = curand_uniform(&localState)/(float)(RAND_MAX);
-    float r2 = curand_uniform(&localState)/(float)(RAND_MAX);
-    float r3 = curand_uniform(&localState)/(float)(RAND_MAX);
+    float r2 = curand_uniform(&localState);///(float)(RAND_MAX);
+    float r3 = curand_uniform(&localState);///(float)(RAND_MAX);
     
-    printf("%d %d %d\n", r1, r2, r3);
+    printf("%f %f %f\n", r1, r2, r3);
+    */
     
     for (int j = 0; j < N_POINTS; ++j) {
         PointSet* PS = &(P->pointSets[id]);
         Point* p = &(PS->points[j]); // p is passed to 'collides' via PS
-        p->x = (float)curand_uniform(&localState)/(float)(RAND_MAX/range) + 12.5; //kappa
-        p->y = (float)curand_uniform(&localState)/(float)(RAND_MAX/range) + 12.5;
-        p->z = (float)curand_uniform(&localState)/(float)(RAND_MAX/range) + 12.5;
+        p->x = curand_uniform(&localState) * range + 12.5;
+        p->y = curand_uniform(&localState) * range + 12.5;
+        p->z = curand_uniform(&localState) * range + 12.5;
         
         int tries = 0;
         while (tries < MAX_TRIES && cuda_collides(p, PS, 0, j, obstacles)) {
-            p->x = (float)curand_uniform(&localState)/(float)(RAND_MAX/range) + 12.5;
-            p->y = (float)curand_uniform(&localState)/(float)(RAND_MAX/range) + 12.5;
-            p->z = (float)curand_uniform(&localState)/(float)(RAND_MAX/5.0) + 12.5;
+            p->x = curand_uniform(&localState) * range + 12.5;
+            p->y = curand_uniform(&localState) * range + 12.5;
+            p->z = curand_uniform(&localState) * 5.0 + 12.5;
             ++tries;
         }
         if (tries == MAX_TRIES) {
@@ -214,7 +216,7 @@ __global__ void setup_kernel(curandState *state) {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     /* Each thread gets same seed, a different sequence 
        number, no offset */
-    curand_init((unsigned long long)clock(), id, 0, &state[id]);
+    curand_init ( 1234, id, 0, &state[id] );
 }
 
 void generateInitialPopulation(Population* P) {
