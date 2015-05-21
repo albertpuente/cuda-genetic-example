@@ -24,11 +24,13 @@ Albert Puente Encinas
 #include <stdlib.h> // e.g. malloc, RAND_MAX, exit
 #include <math.h>   // e.g. sin, abs
 #include <sys/time.h>
+#include <cuda.h>
+#include <curand_kernel.h>
 
 // Genetic algorithm parameters
-#define N 1024
-#define N_POINTS 64
-#define ITERATION_LIMIT 1000
+#define N 2048
+#define N_POINTS 64*16
+#define ITERATION_LIMIT 1
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
 #define POINT_MUTATION_PROB 0.01
@@ -63,9 +65,9 @@ inline void tic(unsigned long long* time) {
     struct timeval t;
     gettimeofday(&t, NULL);
     *time = t.tv_sec*1000000 + t.tv_usec - *time;
-    
 }
 #define toc tic
+//inline void toc(unsigned long long* time) { tic(time); }
 
 // Output toggles
 bool DUMP;
@@ -91,6 +93,8 @@ typedef struct {
 
 #define N_OBSTACLES 27
 Obstacle obstacles[N_OBSTACLES];
+
+Obstacle* cuda_obstacles;
 
 inline bool randomChoice(float probability) {
     if ((float)rand()/(float)(RAND_MAX) <= probability) return true;
@@ -143,32 +147,113 @@ bool collides(PointSet* PS, PointSet* QS, int ixq, int ixp) {
 }
 */
 
+void checkCudaError(char msg[]) {
+    cudaError_t error;
+    error = cudaGetLastError();
+    if (error) printf("Error: %s: %s\n", msg, cudaGetErrorString(error));
+}
+
+__device__ inline float cuda_dist(Point* a, Point* b) {
+    return sqrt(pow(a->x - b->x, 2)+pow(a->y - b->y, 2)+pow(a->z - b->z, 2));
+}
+
+__device__ bool cuda_collides(Point* p, PointSet* PS, int from, int to, Obstacle* obstacles) {
+    if (CHECK_COLLISIONS)
+        for (int i = from; i < to; ++i) {
+            if (cuda_dist(p, &PS->points[i]) < POINT_RADIUS*2) {
+                return true;
+            }
+        }
+    if (CHECK_OBSTACLES)
+        for (int i = 0; i < N_OBSTACLES; ++i) {
+            Obstacle o = obstacles[i];
+            if (cuda_dist(p, &o.centre) < POINT_RADIUS + o.radius) {
+                return true;
+            }
+        }
+    return false;
+}
+
+__global__ void kernel_generateInitialPopulation(Population* P, 
+                    Obstacle* obstacles, curandState* state) {
+    
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    curandState localState = state[id];
+    
+    float range = POINT_RADIUS * pow((float)N_POINTS, 1.0f/3.0f) * 10;    
+    
+    float r1 = curand_uniform(&localState)/(float)(RAND_MAX);
+    float r2 = curand_uniform(&localState)/(float)(RAND_MAX);
+    float r3 = curand_uniform(&localState)/(float)(RAND_MAX);
+    
+    printf("%d %d %d\n", r1, r2, r3);
+    
+    for (int j = 0; j < N_POINTS; ++j) {
+        PointSet* PS = &(P->pointSets[id]);
+        Point* p = &(PS->points[j]); // p is passed to 'collides' via PS
+        p->x = (float)curand_uniform(&localState)/(float)(RAND_MAX/range) + 12.5; //kappa
+        p->y = (float)curand_uniform(&localState)/(float)(RAND_MAX/range) + 12.5;
+        p->z = (float)curand_uniform(&localState)/(float)(RAND_MAX/range) + 12.5;
+        
+        int tries = 0;
+        while (tries < MAX_TRIES && cuda_collides(p, PS, 0, j, obstacles)) {
+            p->x = (float)curand_uniform(&localState)/(float)(RAND_MAX/range) + 12.5;
+            p->y = (float)curand_uniform(&localState)/(float)(RAND_MAX/range) + 12.5;
+            p->z = (float)curand_uniform(&localState)/(float)(RAND_MAX/5.0) + 12.5;
+            ++tries;
+        }
+        if (tries == MAX_TRIES) {
+            //printf("Error during the generation of the initial population\n");
+            //exit(1);
+        }
+    }
+}
+
+__global__ void setup_kernel(curandState *state) {
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    /* Each thread gets same seed, a different sequence 
+       number, no offset */
+    curand_init((unsigned long long)clock(), id, 0, &state[id]);
+}
+
 void generateInitialPopulation(Population* P) {
     tic(&initialGenTime);
     
-    float range = POINT_RADIUS * pow((float)N_POINTS, 1.0/3.0) * 10;
-    for (int i = 0; i < N; ++i) {
-        for (int j = 0; j < N_POINTS; ++j) {
-            PointSet* PS = &(P->pointSets[i]);
-            Point* p = &(PS->points[j]); // p is passed to 'collides' via PS
-            p->x = (float)rand()/(float)(RAND_MAX/range) + 12.5; //kappa
-            p->y = (float)rand()/(float)(RAND_MAX/range) + 12.5;
-            p->z = (float)rand()/(float)(RAND_MAX/range) + 12.5;
-            
-            int tries = 0;
-            while (tries < MAX_TRIES && collides(p, PS, 0, j)) {
-                p->x = (float)rand()/(float)(RAND_MAX/range) + 12.5;
-                p->y = (float)rand()/(float)(RAND_MAX/range) + 12.5;
-                p->z = (float)rand()/(float)(RAND_MAX/5.0) + 12.5;
-                ++tries;
-            }
-            if (tries == MAX_TRIES) {
-                printf("Error during the generation of the initial population\n");
-                exit(1);
-            }
-            //P->pointSets[i].points[j] = p;
-        }
-    }
+    // CUDA STUFF
+    
+    unsigned int nThreads = 1024;
+    unsigned int nBlocks = N/nThreads;  // N multiple de nThreads
+    unsigned int numBytes = N * sizeof(PointSet);   
+    
+    //RANDOM SETUP
+    curandState *devStates;
+    cudaMalloc((void **)&devStates, N * sizeof(curandState));
+    setup_kernel<<<nBlocks, nThreads>>>(devStates);
+    checkCudaError((char *) "setup random kernel");
+    
+    //RANDOM END
+    
+    // cudaMalloc
+    Population* gpu_P;    
+    cudaMalloc(&gpu_P, numBytes); // might be missing a cast
+    checkCudaError((char *) "cudaMalloc in generateInitialPopulation");
+    
+    // kernel 
+    kernel_generateInitialPopulation<<<nBlocks, nThreads>>>(gpu_P, cuda_obstacles, devStates);
+    checkCudaError((char *) "kernel call in generateInitialPopulation");
+    
+    // wait
+    cudaDeviceSynchronize();
+    
+    // copy back
+    cudaMemcpy(P, gpu_P, numBytes, cudaMemcpyDeviceToHost); 
+    checkCudaError((char *) "gpu -> host in generateInitialPopulation");
+    
+    // free
+    cudaFree(gpu_P);
+    
+    cudaDeviceSynchronize();
     
     toc(&initialGenTime);
 }
@@ -301,6 +386,7 @@ void randomMove(PointSet* AP, PointSet* AQ) {
             //exit(1);
             p = AP->points[i];
         }
+
         AQ->points[i] = p;
     } 
 }
@@ -366,13 +452,6 @@ void reproduce(Population* P, Population* Q) {
     toc(&reproductionTime);
 }
 
-void progressAnim(int it) {
-    int i = 0;
-    for (; i < (it*40)/ITERATION_LIMIT; ++i) printf("|");
-    for (; i < 40; ++i) printf("·");
-    printf(" %i%%\n", it*100/ITERATION_LIMIT);
-}
-
 void DUMPInitialParams() {
     printf("%i\n", N_OBSTACLES);
     for (int i = 0; i < N_OBSTACLES; ++i) {
@@ -397,7 +476,31 @@ void printTimes() {
     printf("    Total time:   %f s.\n", (double)totalTime/1000000);
 }
 
-void sequentialGenetic() {
+void initObstacles() {    
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            for (int k = 0; k < 3; ++k) {
+                Point origin;
+                origin.x = 3*i;
+                origin.y = 3*j;
+                origin.z = 3*k;
+
+                obstacles[i*9 + j*3 + k].centre = origin;
+                obstacles[i*9 + j*3 + k].radius = 1.0;
+            }
+        }
+    }
+    
+    cudaMalloc(&cuda_obstacles, sizeof(Obstacle)*N_OBSTACLES);
+    cudaMemcpy(cuda_obstacles, obstacles, sizeof(Obstacle)*N_OBSTACLES, cudaMemcpyHostToDevice);
+    checkCudaError((char *) "host -> gpu obstacles");
+    
+    cudaDeviceSynchronize();
+}
+
+void cudaGenetic() {
+    initObstacles();
+    
     tic(&totalTime);
     
     srand(SEED);
@@ -406,6 +509,7 @@ void sequentialGenetic() {
     
     Population* P = (Population*) malloc(sizeof(Population));
     Population* Q = (Population*) malloc(sizeof(Population));
+   
     
     if (P == NULL || Q == NULL) {
         printf("ERROR: Failed to allocate %lu KB.\n", 2*sizeof(Population)/1024);
@@ -427,7 +531,6 @@ void sequentialGenetic() {
         else {            
             printf("\nIt: %i/%i Score: %f -> %f\n", 
                    it, ITERATION_LIMIT, Q->maxScore, GOAL_SCORE);
-            progressAnim(it);
         }
         
         if (it >= ITERATION_LIMIT || Q->maxScore <= GOAL_SCORE) 
@@ -445,27 +548,9 @@ void sequentialGenetic() {
     if (!DUMP) printTimes();
 }
 
-void initObstacles() {
-    
-    for (int i = 0; i < 3; ++i) {
-        for (int j = 0; j < 3; ++j) {
-            for (int k = 0; k < 3; ++k) {
-                Point origin;
-                origin.x = 3*i;
-                origin.y = 3*j;
-                origin.z = 3*k;
-
-                obstacles[i*9 + j*3 + k].centre = origin;
-                obstacles[i*9 + j*3 + k].radius = 1.0;
-            }
-        }
-    }    
-}
-
 int main(int argc, char** argv) {
     DUMP = (argc == 1);
-    initObstacles();
-    sequentialGenetic();
+    cudaGenetic();
     return 0;
 }
 

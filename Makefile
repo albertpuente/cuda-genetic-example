@@ -5,6 +5,7 @@ CUDA_HOME   = /Soft/cuda/6.5.14
 NVCC        = $(CUDA_HOME)/bin/nvcc
 NVCC_FLAGS  = -O3 -I$(CUDA_HOME)/include -arch=sm_20 -I$(CUDA_HOME)/sdk/CUDALibraries/common/inc 
 LD_FLAGS    = -lcudart -Xlinker -rpath,$(CUDA_HOME)/lib64 -I$(CUDA_HOME)/sdk/CUDALibraries/common/lib
+# era -arch=sm_20
 
 # C
 CFLAGS=-O2 -lm -std=c99 -w
@@ -22,14 +23,11 @@ show:	genetic geneticViewer
 exec:	genetic
 	./genetic 1
 	
-potato:	geneticCUDA geneticViewer
-	./geneticCUDA > data && ./geneticViewer data
-
-berry:	geneticCUDA
+berry:	cuda
 	./geneticCUDA 1
 	
 clean:
-	rm *.o genetic geneticCUDA SESION* # geneticViewer 
+	rm -f *.o genetic geneticCUDA SESION* geneticViewer 
 	
 cuda.o: genetic.cu
 	$(NVCC) -c -o $@ genetic.cu $(NVCC_FLAGS)
