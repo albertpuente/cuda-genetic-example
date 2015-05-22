@@ -334,19 +334,18 @@ __global__ void dynamic_quicksort_jan(Population* P, int left, int right, int de
         // left
         if (left < piv - 1) {
             cudaStream_t ls;
-            cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking);
-            dynamic_quicksort_jan<<< 1, 1, 0, s >>>(P, left, piv - 1, depth + 1);
+            cudaStreamCreateWithFlags(&ls, cudaStreamNonBlocking);
+            dynamic_quicksort_jan<<< 1, 1, 0, ls >>>(P, left, piv - 1, depth + 1);
             cudaStreamDestroy(ls);
         }
 
         //right
         if (piv + 1 < right) { 
             cudaStream_t rs;
-            cudaStreamCreateWithFlags(&s1, cudaStreamNonBlocking);
-            dynamic_quicksort_jan<<< 1, 1, 0, s1 >>>(P, piv + 1, right, depth + 1);
+            cudaStreamCreateWithFlags(&rs, cudaStreamNonBlocking);
+            dynamic_quicksort_jan<<< 1, 1, 0, rs >>>(P, piv + 1, right, depth + 1);
             cudaStreamDestroy(rs);
-        }
-    
+        }    
 }
 
 __global__ void dynamic_quicksort(Population* P, int left, int right, int depth) {
