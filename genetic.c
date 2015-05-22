@@ -26,9 +26,9 @@ Albert Puente Encinas
 #include <sys/time.h>
 
 // Genetic algorithm parameters
-#define N 1024
-#define N_POINTS 64
-#define ITERATION_LIMIT 1000
+#define N 2048
+#define N_POINTS 128
+#define ITERATION_LIMIT 50
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
 #define POINT_MUTATION_PROB 0.01

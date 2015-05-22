@@ -3,9 +3,9 @@ all: genetic cuda # geneticViewer
 # CUDA
 CUDA_HOME   = /Soft/cuda/6.5.14
 NVCC        = $(CUDA_HOME)/bin/nvcc
-NVCC_FLAGS  = -O3 -I$(CUDA_HOME)/include -arch=sm_20 -I$(CUDA_HOME)/sdk/CUDALibraries/common/inc 
-LD_FLAGS    = -lcudart -Xlinker -rpath,$(CUDA_HOME)/lib64 -I$(CUDA_HOME)/sdk/CUDALibraries/common/lib
-# era -arch=sm_20
+NVCC_FLAGS  = -O3 -I$(CUDA_HOME)/include -arch=compute_35 -code=sm_35 -rdc=true -I$(CUDA_HOME)/sdk/CUDALibraries/common/inc 
+LD_FLAGS    = -lcudadevrt -Xlinker -rpath,$(CUDA_HOME)/lib64 -I$(CUDA_HOME)/sdk/CUDALibraries/common/lib
+
 
 # C
 CFLAGS=-O2 -lm -std=c99 -w
@@ -39,4 +39,5 @@ sub:	cuda
 	rm -f SESION*
 	qsub -l cuda job.sh && watch -n 0.5 qstat
 	
-	
+subseq: genetic
+	qsub -l cuda jobseq.sh && watch -n 0.5 qstat
