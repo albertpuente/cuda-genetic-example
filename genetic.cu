@@ -272,6 +272,110 @@ __device__ void selection_sort(Population* P, int left, int right ) {
     }
 }
 
+
+__device__ inline PointSet* candidate(Population* p, int ix) {
+    return &p->pointSets[ix];
+}
+
+__device__ inline void swapCandidates(Population* p, int i, int j) {
+    swap_pointSets(candidate(p, i), candidate(p, j));
+}
+
+// Partition algorithm (from wikipedia)
+ //////////////////////////////////////////////////////////////////////////////
+ //  // lo is the index of the leftmost element of the subarray              //
+ //  // hi is the index of the rightmost element of the subarray (inclusive) //
+ //  partition(A, lo, hi)                                                    //
+ //     pivotIndex := choosePivot(A, lo, hi)                                 //
+ //     pivotValue := A[pivotIndex]                                          //
+ //     // put the chosen pivot at A[hi]                                     //
+ //     swap A[pivotIndex] and A[hi]                                         //
+ //     storeIndex := lo                                                     //
+ //     // Compare remaining array elements against pivotValue = A[hi]       //
+ //     for i from lo to hi−1, inclusive                                     //
+ //         if A[i] <= pivotValue                                            //
+ //             swap A[i] and A[storeIndex]                                  //
+ //             storeIndex := storeIndex + 1                                 //
+ //     swap A[storeIndex] and A[hi]  // Move pivot to its final place       //
+ //     return storeIndex                                                    //
+ //////////////////////////////////////////////////////////////////////////////
+
+__device__ int partition(Population* P, int lo, int hi) {
+    int pivIx = (lo + hi)/2;
+    float pivScore = P->pointSets[pivIx].score;
+    swap_pointSets(&P->pointSets[hi], &P->pointSets[pivIx]);
+    int stIx = lo;
+    for (int i = lo; i < hi; ++i) {
+        if (candidate(P, i)->score <= pivScore) {
+            swapCandidates(P, i, stIx);
+            ++stIx;
+        }
+    }
+    swapCandidates(P, stIx, hi);
+    return stIx;
+}
+
+__global__ void dynamic_quicksort_jan(Population* P, int left, int right, int depth) {
+    // If we're too deep or there are few elements left, we use an insertion sort...
+    if (depth >= MAX_DEPTH || right - left <= INSERTION_SORT) {
+        selection_sort(P, left, right);
+        return;
+    }
+    
+    int lindex = left;
+    int rindex = right;
+    float pscore = P->pointSets[(left+right)/2].score; // Pivot
+
+    // Do the partitioning.
+    while (lindex <= rindex) {
+        // Find the next left- and right-hand values to swap
+        float lscore = P->pointSets[lindex].score; 
+        float rscore = P->pointSets[rindex].score;
+
+        // Move the left pointer as long as the pointed element is smaller than the pivot.
+        // TODO: dicotomic search
+        while (lscore < pscore) {
+            lindex++;
+            lscore = P->pointSets[lindex].score; 
+        }
+
+        // Move the right pointer as long as the pointed element is larger than the pivot.
+        // TODO: dicotomic search
+        while (rscore > pscore) {
+            rindex--;
+            rscore = P->pointSets[rindex].score;
+        }
+
+        // If the swap points are valid, do the swap!
+        if (lindex <= rindex) {
+            
+            // TODO: This needs to be improved, we can sort a vector
+            // of indices instead of copying the whole pointSets.
+            swap_pointSets(&P->pointSets[lindex], &P->pointSets[rindex]);
+            
+            lindex++;
+            rindex--;
+        }
+    }
+
+    // Now the recursive part
+    // Launch a new block to sort the left part.
+    if (left < rindex) {
+        cudaStream_t s;
+        cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking);
+        dynamic_quicksort_jan<<< 1, 1, 0, s >>>(P, left, rindex, depth + 1);
+        cudaStreamDestroy(s);
+    }
+
+    // Launch a new block to sort the right part.
+    if (lindex < right) {
+        cudaStream_t s1;
+        cudaStreamCreateWithFlags(&s1, cudaStreamNonBlocking);
+    dynamic_quicksort_jan<<< 1, 1, 0, s1 >>>(P, lindex, right, depth + 1);
+        cudaStreamDestroy(s1);
+    }
+}
+
 __global__ void dynamic_quicksort(Population* P, int left, int right, int depth) {
     // If we're too deep or there are few elements left, we use an insertion sort...
     if (depth >= MAX_DEPTH || right - left <= INSERTION_SORT) {
@@ -290,12 +394,14 @@ __global__ void dynamic_quicksort(Population* P, int left, int right, int depth)
         float rscore = P->pointSets[rindex].score;
 
         // Move the left pointer as long as the pointed element is smaller than the pivot.
+        // TODO: dicotomic search
         while (lscore < pscore) {
             lindex++;
             lscore = P->pointSets[lindex].score; 
         }
 
         // Move the right pointer as long as the pointed element is larger than the pivot.
+        // TODO: dicotomic search
         while (rscore > pscore) {
             rindex--;
             rscore = P->pointSets[rindex].score;
@@ -304,7 +410,7 @@ __global__ void dynamic_quicksort(Population* P, int left, int right, int depth)
         // If the swap points are valid, do the swap!
         if (lindex <= rindex) {
             
-            // FOR GOD'S SAKE; This needs to be improved, we can sort a vector
+            // TODO: This needs to be improved, we can sort a vector
             // of indices instead of copying the whole pointSets.
             swap_pointSets(&P->pointSets[lindex], &P->pointSets[rindex]);
             
