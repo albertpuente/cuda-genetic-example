@@ -1,23 +1,23 @@
 /*
-Compile with: 
+  Compile with: 
 
-    gcc genetic.c -o genetic -O2 -lm -std=c99 
+  gcc genetic.c -o genetic -O2 -lm -std=c99 
 
-    -O2      Optimization
-    -lm      Link to math lib
-    -std=c99 Use of for(;;;) with declaration among other things
+  -O2      Optimization
+  -lm      Link to math lib
+  -std=c99 Use of for(;;;) with declaration among other things
 
-Usage (3D viewer):
+  Usage (3D viewer):
 
-    ./genetic > data && ./geneticViewer data
+  ./genetic > data && ./geneticViewer data
     
-Usage (debug):
+  Usage (debug):
 
-    ./genetic
+  ./genetic
 
-Jan Mas Rovira
-Andrés Mingorance López
-Albert Puente Encinas
+  Jan Mas Rovira
+  Andrés Mingorance López
+  Albert Puente Encinas
 */
 
 #include <stdio.h>  // e.g. printf
@@ -36,7 +36,7 @@ Albert Puente Encinas
 
 // Genetic algorithm parameters
 #define N 32 // N = nThreads*k
-#define N_POINTS 128
+#define N_POINTS 16
 #define ITERATION_LIMIT 10
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
@@ -146,9 +146,16 @@ __device__ void printPoint(Point* p) {
     printf("x = %f, y = %f, z = %f\n", p->x, p->y, p->z);
 }
 
+__host__ void printPointH(Point* p) {
+    printf("x = %f, y = %f, z = %f\n", p->x, p->y, p->z);
+}
 
 __device__ inline PointSet* candidate(Population* p, int ix) {
     return p->pointSets[ix];
+}
+
+__device__ inline PointSet** candidateRef(Population* p, int ix) {
+    return &p->pointSets[ix];
 }
 
 __host__ inline PointSet* candidateH(Population* p, int ix) {
@@ -162,8 +169,16 @@ __device__ void printPoints(PointSet* P) {
     printf("\n");
 }
 
+__global__ void printPointsH(Population* P, int i) {
+    PointSet* p = candidate(P, i);
+    for (int i = 0; i < N_POINTS; ++i) {
+        printPoint(&p->points[i]);
+    }
+    printf("\n");
+}
+
 __global__ void kernel_generateInitialPopulation(Population* P, 
-                    Obstacle* obstacles, curandState* state) {
+                                                 Obstacle* obstacles, curandState* state) {
     
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     
@@ -172,17 +187,14 @@ __global__ void kernel_generateInitialPopulation(Population* P,
     float range = POINT_RADIUS * pow((float)N_POINTS, 1.0f/3.0f) * 10;    
     
     /*
-    float r1 = curand_uniform(&localState)/(float)(RAND_MAX);
-    float r2 = curand_uniform(&localState);///(float)(RAND_MAX);
-    float r3 = curand_uniform(&localState);///(float)(RAND_MAX);
+      float r1 = curand_uniform(&localState)/(float)(RAND_MAX);
+      float r2 = curand_uniform(&localState);///(float)(RAND_MAX);
+      float r3 = curand_uniform(&localState);///(float)(RAND_MAX);
     
-    printf("%f %f %f\n", r1, r2, r3);
+      printf("%f %f %f\n", r1, r2, r3);
     */
     PointSet* PS = candidate(P, id); // &(P->pointSets[id]);
-     if (id == 0) {printf("before\n");
-         printPoints(PS);
-     }
-     for (int j = 0; j < N_POINTS; ++j) {
+    for (int j = 0; j < N_POINTS; ++j) {
         Point* p = &(PS->points[j]); // p is passed to 'collides' via PS
         float px = CURAND * range + 12.5;
         p->x = px;
@@ -201,10 +213,6 @@ __global__ void kernel_generateInitialPopulation(Population* P,
             //exit(1);
         }
     }
-    if (id == 0) {printf("after\n");
-        printPoints(PS);
-    }
- 
 }
 
 __global__ void setup_kernel(curandState *state) {
@@ -224,7 +232,7 @@ void generateInitialPopulation(Population* gpu_P) {
     checkCudaError((char *) "setup random kernel");    
     //RANDOM END
     
-      // kernel 
+    // kernel 
     kernel_generateInitialPopulation<<<nBlocks, nThreads>>>(gpu_P, gpu_obstacles, devStates);
     checkCudaError((char *) "kernel call in generateInitialPopulation");
     
@@ -269,7 +277,7 @@ __global__ void kernel_evaluate(Population* P, Point* destination) {
         C->score += inc;
         //printf("incr = %f\n", inc);
     }
-   // printf("final score = %f\n", C->score);
+    // printf("final score = %f\n", C->score);
 }
 
 
@@ -298,19 +306,19 @@ __device__ void swap_pointSets(PointSet* a, PointSet* b) {
     *b = aux;
 }
 
-__device__ void swap_pointSets_jan(PointSet*a, PointSet* b) {
-    PointSet* aux = a;
-    a = b;
-    b = aux;
+__device__ void swap_pointSets_jan(PointSet** a, PointSet** b) {
+    PointSet* aux = *a;
+    *a = *b;
+    *b = aux;
 } 
 
 
 __device__ inline void swapCandidates(Population* p, int i, int j) {
     float a = candidate(p, i)->score;
     float b = candidate(p, j)->score;
-    swap_pointSets_jan(candidate(p, i), candidate(p, j));
-    if (a != candidate(p, j)->score) printf("swap error");
-    if (b != candidate(p, i)->score) printf("swap error");
+    swap_pointSets_jan(candidateRef(p, i), candidateRef(p, j));
+    if (a != candidate(p, j)->score) printf("swap error\n");
+    if (b != candidate(p, i)->score) printf("swap error\n");
 }
 
 
@@ -380,11 +388,11 @@ __device__ void selection_sort_jan(Population* P, int lo, int hi) {
 //////////////////////////////////////////////////////////////////////////////
 
 __device__ void printScores(Population* P, int lo, int hi) {
-   for (int i = lo; i <= hi; ++i) {
+    for (int i = lo; i <= hi; ++i) {
         if (i > lo && ((i - lo) % 5 == 0)) printf("\n");
         printf("%f ", candidate(P, i)->score);
     }
-   printf("\n");
+    printf("\n");
 }
 
 __device__ void checkPartition(Population* P, int lo, int hi, int piv) {
@@ -477,7 +485,6 @@ __device__ void dynamic_quicksort_jan_dev(Population* P, int left, int right, in
     if (piv + 1 < right) {
         dynamic_quicksort_jan_dev(P, piv + 1, right, depth + 1);
     }
-    printf("left = %d, piv = %d, right = %d\n", left, piv, right);
     checkSorted(P, left, right);
 }
 
@@ -638,7 +645,7 @@ __device__ void mix(PointSet* AP, PointSet* AQ, Obstacle* obstacles,
                 // and it doesn't collide with a point that has yet to be moved
                 // (this 2nd check prevents inconsistencies like a point being unable to move at all)
                 !cuda_collides(&p, AP, i + 1, N_POINTS, obstacles))
-                    break;
+                break;
             ++tries;
         }
         if (tries == MAX_TRIES) {
@@ -651,7 +658,7 @@ __device__ void mix(PointSet* AP, PointSet* AQ, Obstacle* obstacles,
 }
 
 __device__ void randomMove(PointSet* AP, PointSet* AQ, Obstacle* obstacles, 
-                                                curandState* localState) {
+                           curandState* localState) {
     for (int i = 0; i < N_POINTS; ++i) {
         
         if (!cuda_randomChoice(POINT_MUTATION_PROB, localState)) {
@@ -669,7 +676,7 @@ __device__ void randomMove(PointSet* AP, PointSet* AQ, Obstacle* obstacles,
                 // and it doesn't collide with a point that has yet to be moved
                 // (this 2nd check prevents inconsistencies like a point being unable to move at all)
                 !cuda_collides(&p, AP, i + 1, N_POINTS, obstacles))
-                    break;
+                break;
             ++tries;
         }
         if (tries == MAX_TRIES) {
@@ -683,14 +690,14 @@ __device__ void randomMove(PointSet* AP, PointSet* AQ, Obstacle* obstacles,
 }
 
 __global__ void kernel_mutate(Population* P, Population* Q, Obstacle* obstacles,
-                                    curandState* state) {
+                              curandState* state) {
     
     int id = blockIdx.x * blockDim.x + threadIdx.x;
-    
+  
     curandState localState = state[id];
     
     PointSet* AP = candidate(P, id); //&P->pointSets[id];    // original points
-    PointSet* AQ = candidate(P, id); //&Q->pointSets[id];    // mutated points
+    PointSet* AQ = candidate(Q, id); //&Q->pointSets[id];    // mutated points
     if (cuda_randomChoice(POINT_SET_MUTATION_PROB, &localState)) { // Mutate
         if (cuda_randomChoice(0.5f, &localState)) {
             mix(AP, AQ, obstacles, &localState);
@@ -709,7 +716,7 @@ __global__ void kernel_mutate(Population* P, Population* Q, Obstacle* obstacles,
 void mutate(Population* gpu_P, Population* gpu_Q) {
     tic(&mutationTime);
     
-     //RANDOM SETUP
+    //RANDOM SETUP
     curandState *devStates;
     cudaMalloc((void **)&devStates, N * sizeof(curandState));
     setup_kernel<<<nBlocks, nThreads>>>(devStates);
@@ -721,6 +728,14 @@ void mutate(Population* gpu_P, Population* gpu_Q) {
     checkCudaError((char *) "kernel call in mutate");
     cudaDeviceSynchronize();
     
+    printf("after kernel Q[0]\n");
+    printPointsH<<<1,1>>>(gpu_Q,0);
+    cudaDeviceSynchronize();
+   
+
+    printf("after kernel P[0]\n");
+    printPointsH<<<1,1>>>(gpu_P,0);
+
     toc(&mutationTime);
 }
 
