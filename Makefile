@@ -35,9 +35,14 @@ cuda.o: genetic.cu
 cuda:	cuda.o
 	$(NVCC) cuda.o -o geneticCUDA $(LD_FLAGS)
 
-sub:	cuda
+subw:	cuda
 	rm -f $(JOB)*
 	qsub -l cuda job.sh && watch -n 0.5 qstat
+
+sub:	cuda
+	rm -f $(JOB)*
+	qsub -l cuda job.sh
+
 
 subseq: genetic
 	qsub -l cuda jobseq.sh && watch -n 0.5 qstat
