@@ -29,15 +29,14 @@
 #define CURAND curand_uniform(&localState)
 
 // CUDA Variables
-//unsigned int nThreads = 64;
-//unsigned int nBlocks = N/nThreads;  // N multiple de nThreads
-#define nThreads 8
+#define nThreads 256
 #define nBlocks N/nThreads
 
+
 // Genetic algorithm parameters
-#define N 32 // N = nThreads*k
-#define N_POINTS 16
-#define ITERATION_LIMIT 10
+#define N 1024 // N = nThreads*k
+#define N_POINTS 128
+#define ITERATION_LIMIT 30
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
 #define POINT_MUTATION_PROB 0.01
@@ -177,8 +176,8 @@ __global__ void printPointsH(Population* P, int i) {
     printf("\n");
 }
 
-__global__ void kernel_generateInitialPopulation(Population* P, 
-                                                 Obstacle* obstacles, curandState* state) {
+__global__ void kernel_generateInitialPopulation(
+    Population* P, Obstacle* obstacles, curandState* state) {
     
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     
@@ -250,26 +249,10 @@ __device__ inline float heur_2(Point* P, Point* destination) {
     return cuda_dist(P, destination);
 }
 
-// __global__ void kernel_evaluate(Population* P, Point* destination) {
-    
-//     int id = blockIdx.x * blockDim.x + threadIdx.x;
-//     PointSet* C = candidate(P, id); //&P->pointSets[id];
-//     C->score = 0;
-//     for (int j = 0; j < N_POINTS; j++) {
-//         Point* E = &C->points[j];
-//         C->score += heur_2(E, destination);
-//     }
-//     printf("final score = %f\n", C->score);
-// }
-
 
 __global__ void kernel_evaluate(Population* P, Point* destination) {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     PointSet* C = candidate(P, id); //&P->pointSets[id];
-    if (id == 0) {
-        printf("evaluate\n");
-        printPoints(C);
-    }
     C->score = 0;
     for (int j = 0; j < N_POINTS; j++) {
         Point* E = &C->points[j];
@@ -279,7 +262,6 @@ __global__ void kernel_evaluate(Population* P, Point* destination) {
     }
     // printf("final score = %f\n", C->score);
 }
-
 
 void evaluate(Population* gpu_P) {
     tic(&evaluationTime);
@@ -314,11 +296,7 @@ __device__ void swap_pointSets_jan(PointSet** a, PointSet** b) {
 
 
 __device__ inline void swapCandidates(Population* p, int i, int j) {
-    float a = candidate(p, i)->score;
-    float b = candidate(p, j)->score;
     swap_pointSets_jan(candidateRef(p, i), candidateRef(p, j));
-    if (a != candidate(p, j)->score) printf("swap error\n");
-    if (b != candidate(p, i)->score) printf("swap error\n");
 }
 
 
@@ -413,8 +391,6 @@ __device__ void checkPartition(Population* P, int lo, int hi, int piv) {
 // left: greater
 // right: lesser or equal
 __device__ int partition(Population* P, int lo, int hi) {
-    printf("before\n");
-    printScores(P, lo, hi);
     int pivIx = (lo + hi)/2;
     float pivScore = candidate(P, pivIx)->score;
     swapCandidates(P, hi, pivIx);
@@ -426,8 +402,6 @@ __device__ int partition(Population* P, int lo, int hi) {
         }
     }
     swapCandidates(P, stIx, hi);
-    checkPartition(P, lo, hi, stIx);
-    printf("\n");
     return stIx;
 }
 
@@ -448,7 +422,7 @@ __device__ void checkSorted(Population* P, int lo, int hi) {
     //     if (!incr) printf("\n\nnot incr -> %d\n\n", i);
     //     ++i;        
     // }
-    if (decr) printf("decreasing order\n");
+    if (decr) ;
 //    else if (incr) printf("increasing order\n");
     else {
         printf("unsorted\n");
@@ -490,8 +464,8 @@ __device__ void dynamic_quicksort_jan_dev(Population* P, int left, int right, in
 
 
 __global__ void dynamic_quicksort_jan(Population* P, int left, int right, int depth) {
-    dynamic_quicksort_jan_dev(P, left, right, depth);
-    return;
+    //dynamic_quicksort_jan_dev(P, left, right, depth);
+    //return;
 
 // If we're too deep or there are few elements left, we use an insertion sort...
     if (depth >= MAX_DEPTH || right - left <= INSERTION_SORT) {
@@ -728,14 +702,7 @@ void mutate(Population* gpu_P, Population* gpu_Q) {
     checkCudaError((char *) "kernel call in mutate");
     cudaDeviceSynchronize();
     
-    printf("after kernel Q[0]\n");
-    printPointsH<<<1,1>>>(gpu_Q,0);
-    cudaDeviceSynchronize();
-   
-
-    printf("after kernel P[0]\n");
-    printPointsH<<<1,1>>>(gpu_P,0);
-
+  
     toc(&mutationTime);
 }
 
