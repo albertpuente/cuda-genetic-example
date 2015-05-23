@@ -35,9 +35,9 @@ Albert Puente Encinas
 #define nBlocks N/nThreads
 
 // Genetic algorithm parameters
-#define N 128 // N = nThreads*k
+#define N 32 // N = nThreads*k
 #define N_POINTS 128
-#define ITERATION_LIMIT 15
+#define ITERATION_LIMIT 10
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
 #define POINT_MUTATION_PROB 0.01
@@ -251,12 +251,22 @@ __device__ void swap_pointSets(PointSet* a, PointSet* b) {
     *b = aux;
 }
 
+__device__ void swap_pointSets_jan(PointSet*a, PointSet* b) {
+    PointSet* aux = a;
+    a = b;
+    b = aux;
+} 
+
 __device__ inline PointSet* candidate(Population* p, int ix) {
     return &p->pointSets[ix];
 }
 
 __device__ inline void swapCandidates(Population* p, int i, int j) {
-    swap_pointSets(candidate(p, i), candidate(p, j));
+    float a = candidate(p, i)->score;
+    float b = candidate(p, j)->score;
+    swap_pointSets_jan(candidate(p, i), candidate(p, j));
+    if (a != candidate(p, j)->score) printf("swap error");
+    if (b != candidate(p, i)->score) printf("swap error");
 }
 
 
@@ -282,6 +292,7 @@ __device__ void selection_sort(Population* P, int left, int right ) {
         }
     }
 }
+
 
 __device__ int whichMax(Population* P, int lo, int hi) {
     float max = candidate(P, lo)->score;
@@ -324,44 +335,75 @@ __device__ void selection_sort_jan(Population* P, int lo, int hi) {
 //     return storeIndex                                                    //
 //////////////////////////////////////////////////////////////////////////////
 
+__device__ void printScores(Population* P, int lo, int hi) {
+   for (int i = lo; i <= hi; ++i) {
+        if (i > lo && ((i - lo) % 5 == 0)) printf("\n");
+        printf("%f ", candidate(P, i)->score);
+    }
+   printf("\n");
+}
+
+__device__ void checkPartition(Population* P, int lo, int hi, int piv) {
+    float ps = candidate(P, piv)->score;
+    bool left = true;
+    for (int i = lo; i < piv && left; ++i)
+        left = candidate(P, i)->score > ps;
+    bool right = true;
+    for (int i = piv + 1; i <= hi && right; ++i)
+        right = ps >= candidate(P, i)->score;
+    if (left && right) printf("partition correct\n");
+    else {printf("INCORRECT partition, leftcorr = %d, rightCorr = %d, piv = %d\n", 
+                 left, right, piv);
+        printScores(P, lo, hi);
+    }
+}
+
+// left: greater
+// right: lesser or equal
 __device__ int partition(Population* P, int lo, int hi) {
+    printf("before\n");
+    printScores(P, lo, hi);
     int pivIx = (lo + hi)/2;
     float pivScore = candidate(P, pivIx)->score;
     swapCandidates(P, hi, pivIx);
     int stIx = lo;
     for (int i = lo; i < hi; ++i) {
-        if (candidate(P, i)->score >= pivScore) {
+        if (candidate(P, i)->score > pivScore) {
             swapCandidates(P, i, stIx);
             ++stIx;
         }
     }
     swapCandidates(P, stIx, hi);
+    checkPartition(P, lo, hi, stIx);
+    printf("\n");
     return stIx;
 }
 
+
 // for debugging
-__global__ void checkSorted(Population* P) {
-    int i = 1;
+__device__ void checkSorted(Population* P, int lo, int hi) {
+    int i = lo + 1;
     bool decr = true;
-    while (i < N && decr) { 
+    while (i <= hi && decr) { 
         decr = candidate(P, i - 1)->score >= candidate(P, i)->score;
-        if (!decr) printf("\n\nnot decr -> %d\n\n", i);
+        //if (!decr) printf("\n\nnot decr -> %d\n\n", i);
         ++i;
     }
-    i = 1;
-    bool incr = true;
-    while (i < N && incr) {
-        incr = candidate(P, i - 1)->score <= candidate(P, i)->score;
-        if (!incr) printf("\n\nnot incr -> %d\n\n", i);
-        ++i;        
-    }
+    // i = lo + 1;
+    // bool incr = true;
+    // while (i <= hi && incr) {
+    //     incr = candidate(P, i - 1)->score <= candidate(P, i)->score;
+    //     if (!incr) printf("\n\nnot incr -> %d\n\n", i);
+    //     ++i;        
+    // }
     if (decr) printf("decreasing order\n");
-    else if (incr) printf("increasing order\n");
-    else {printf("unsorted\n");
-        for (int i = 0; i < N; ++i) {
-            printf("%f ", candidate(P, i)->score);
-        }
-        printf("\n------\n");
+//    else if (incr) printf("increasing order\n");
+    else {
+        printf("unsorted\n");
+        // for (int i = 0; i < N; ++i) {
+        //     printf("%f ", candidate(P, i)->score);
+        // }
+        // printf("\n------\n");
     }
 }
 
@@ -373,9 +415,35 @@ __global__ void checkSorted(Population* P) {
 //         quicksort(A, lo, p - 1) //
 //         quicksort(A, p + 1, hi) //
 /////////////////////////////////////
-__global__ void dynamic_quicksort_jan(Population* P, int left, int right, int depth) {
+// non parallel version
+__device__ void dynamic_quicksort_jan_dev(Population* P, int left, int right, int depth) {
     // If we're too deep or there are few elements left, we use an insertion sort...
-    if (true || depth >= MAX_DEPTH || right - left <= INSERTION_SORT) {
+    // if (depth >= MAX_DEPTH || right - left <= INSERTION_SORT) {
+    //     selection_sort_jan(P, left, right);
+    //     return;
+    // }
+    int piv = partition(P, left, right);
+        
+    // left
+    if (left < piv - 1) {
+        dynamic_quicksort_jan_dev(P, left, piv - 1, depth + 1);
+    }
+
+    //right
+    if (piv + 1 < right) {
+        dynamic_quicksort_jan_dev(P, piv + 1, right, depth + 1);
+    }
+    printf("left = %d, piv = %d, right = %d\n", left, piv, right);
+    checkSorted(P, left, right);
+}
+
+
+__global__ void dynamic_quicksort_jan(Population* P, int left, int right, int depth) {
+    dynamic_quicksort_jan_dev(P, left, right, depth);
+    return;
+
+// If we're too deep or there are few elements left, we use an insertion sort...
+    if (depth >= MAX_DEPTH || right - left <= INSERTION_SORT) {
         selection_sort_jan(P, left, right);
         return;
     }
@@ -397,6 +465,7 @@ __global__ void dynamic_quicksort_jan(Population* P, int left, int right, int de
         cudaStreamDestroy(rs);
     }    
 }
+
 
 __global__ void dynamic_quicksort(Population* P, int left, int right, int depth) {
     // If we're too deep or there are few elements left, we use an insertion sort...
@@ -460,17 +529,17 @@ __global__ void dynamic_quicksort(Population* P, int left, int right, int depth)
 }
 
 
-void sort(Population* gpu_P) {
+__host__ void sort(Population* gpu_P) {
     tic(&sortingTime);
     
     // Prepare CDP for the max depth 'MAX_DEPTH'.
     cudaDeviceSetLimit(cudaLimitDevRuntimeSyncDepth, MAX_DEPTH);
     
-    dynamic_quicksort_jan<<<1, 1>>>(gpu_P, 0, N - 1, 0);
+    dynamic_quicksort_jan<<< 1,1 >>>(gpu_P, 0, N - 1, 0);
     checkCudaError((char *) "kernel call in mutate");
     cudaDeviceSynchronize();
     toc(&sortingTime);
-    checkSorted<<<1,1>>>(gpu_P);
+    //checkSorted<<<1,1>>>(gpu_P, 0, N - 1);
 }
 
 __device__ void mix(PointSet* AP, PointSet* AQ, Obstacle* obstacles, 
