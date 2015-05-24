@@ -35,8 +35,8 @@
 
 // Genetic algorithm parameters
 #define N 1024 // N = nThreads*k
-#define N_POINTS 128
-#define ITERATION_LIMIT 30
+#define N_POINTS 256
+#define ITERATION_LIMIT 5
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
 #define POINT_MUTATION_PROB 0.01
@@ -194,7 +194,7 @@ __global__ void kernel_generateInitialPopulation(
     */
     PointSet* PS = candidate(P, id); // &(P->pointSets[id]);
     for (int j = 0; j < N_POINTS; ++j) {
-        Point* p = &(PS->points[j]); // p is passed to 'collides' via PS
+        Point* p = &PS->points[j]; // p is passed to 'collides' via PS
         float px = CURAND * range + 12.5;
         p->x = px;
         p->y = CURAND * range + 12.5;
@@ -252,27 +252,30 @@ __device__ inline float heur_2(Point* P, Point* destination) {
 
 __global__ void kernel_evaluate(Population* P, Point* destination) {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
-    PointSet* C = candidate(P, id); //&P->pointSets[id];
-    C->score = 0;
-    for (int j = 0; j < N_POINTS; j++) {
-        Point* E = &C->points[j];
-        float inc = heur_2(E, destination);
-        C->score += inc;
-        //printf("incr = %f\n", inc);
-    }
-    // printf("final score = %f\n", C->score);
+    //PointSet* C = candidate(P, id); //&P->pointSets[id];
+    //C->score = 0;
+    // for (int j = 0; j < N_POINTS; j++) {
+    //     Point* E = &C->points[j];
+    //     float inc = heur_2(E, destination);
+    //     C->score += inc;
+    // }
 }
 
-void evaluate(Population* gpu_P) {
+
+void evaluate(Population* gpu_P, char* msg) {
     tic(&evaluationTime);
     
     // kernel 
     kernel_evaluate<<<nBlocks, nThreads>>>(gpu_P, gpu_destination);
-    checkCudaError((char *) "kernel call in generateInitialPopulation");
+    checkCudaError(msg);
     
     // wait
     cudaDeviceSynchronize();
     toc(&evaluationTime);
+}
+
+void evaluate(Population* P) {
+    evaluate(P, (char*) "kernel call in evaluate");
 }
 
 //////////////////////////////////////////
@@ -562,7 +565,7 @@ __host__ void sort(Population* gpu_P) {
     cudaDeviceSetLimit(cudaLimitDevRuntimeSyncDepth, MAX_DEPTH);
     
     dynamic_quicksort_jan<<< 1,1 >>>(gpu_P, 0, N - 1, 0);
-    checkCudaError((char *) "kernel call in mutate");
+    checkCudaError((char *) "kernel call in sort");
     cudaDeviceSynchronize();
     toc(&sortingTime);
     //checkSorted<<<1,1>>>(gpu_P, 0, N - 1);
@@ -570,11 +573,12 @@ __host__ void sort(Population* gpu_P) {
 
 __device__ void mix(PointSet* AP, PointSet* AQ, Obstacle* obstacles, 
                     curandState* localState) {
-
     for (int i = 0; i < N_POINTS; ++i) {
         
-        if (!cuda_randomChoice(POINT_MUTATION_PROB, localState)) {
+        // DEBUG
+        if (true || !cuda_randomChoice(POINT_MUTATION_PROB, localState)) {
             AQ->points[i] = AP->points[i];
+            
             continue;
         }           
    
@@ -589,7 +593,7 @@ __device__ void mix(PointSet* AP, PointSet* AQ, Obstacle* obstacles,
             float dy =  AP->points[j].y - AP->points[i].y;
             float dz =  AP->points[j].z - AP->points[i].z;
             // "Normalization" ||direction|| = 0.5
-            float norm = sqrt(pow(dx,2)+pow(dy,2)+pow(dz,2));
+            float norm = sqrt(pow(dx, 2) + pow(dy, 2) + pow(dz, 2));
             norm *= (1.0/MAX_DELTA);
             norm /= curand_uniform(localState); // move a random portion of MAX_DELTA
             if (norm < 1e-4 && norm > -1e-4) {
@@ -658,7 +662,6 @@ __device__ void randomMove(PointSet* AP, PointSet* AQ, Obstacle* obstacles,
             //exit(1);
             p = AP->points[i];
         }
-
         AQ->points[i] = p;
     } 
 }
@@ -670,17 +673,20 @@ __global__ void kernel_mutate(Population* P, Population* Q, Obstacle* obstacles,
   
     curandState localState = state[id];
     
-    PointSet* AP = candidate(P, id); //&P->pointSets[id];    // original points
-    PointSet* AQ = candidate(Q, id); //&Q->pointSets[id];    // mutated points
-    if (cuda_randomChoice(POINT_SET_MUTATION_PROB, &localState)) { // Mutate
-        if (cuda_randomChoice(0.5f, &localState)) {
-            mix(AP, AQ, obstacles, &localState);
+    PointSet** AP = candidateRef(P, id); //&P->pointSets[id];    // original points
+    PointSet** AQ = candidateRef(Q, id); //&Q->pointSets[id];    // mutated points
+    // TODO: remove true from condition after debugging
+    if (true || cuda_randomChoice(POINT_SET_MUTATION_PROB, &localState)) { // Mutate
+        // DEBUG
+        if (true || cuda_randomChoice(0.5f, &localState)) {
+            mix(*AP, *AQ, obstacles, &localState);
         }
         else {
-            randomMove(AP, AQ, obstacles, &localState);
+            randomMove(*AP, *AQ, obstacles, &localState);
         }
     }        
-    else { // Copy
+    else { 
+        // Copy
         *AQ = *AP;
     }
 }
@@ -697,13 +703,18 @@ void mutate(Population* gpu_P, Population* gpu_Q) {
     checkCudaError((char *) "setup random kernel");    
     //RANDOM END
     
+    evaluate(gpu_P, (char*)"eval before mutate P");
+
     // kernel 
     kernel_mutate<<<nBlocks, nThreads>>>(gpu_P, gpu_Q, gpu_obstacles, devStates);
     checkCudaError((char *) "kernel call in mutate");
     cudaDeviceSynchronize();
     
-  
     toc(&mutationTime);
+
+    // debug 
+    evaluate(gpu_P, (char*)"eval P after mutate");
+    evaluate(gpu_Q, (char*)"eval Q");
 }
 
 void dump(PointSet* C) {
@@ -754,7 +765,7 @@ void reproduce(Population* gpu_P, Population* gpu_Q) {
     
     // kernel 
     kernel_reproduce<<<nBlocks, nThreads>>>(gpu_P, gpu_Q, devStates);
-    checkCudaError((char *) "kernel call in mutate");   
+    checkCudaError((char *) "kernel call in reproduce");   
     cudaDeviceSynchronize();
     
     toc(&reproductionTime);
@@ -828,8 +839,9 @@ void initDestinationPoint() {
 }
 
 __global__ void mallocPointSets(Population* P) {
-    for (int i = 0; i < N; ++i) 
+    for (int i = 0; i < N; ++i)  {
         P->pointSets[i] = (PointSet*) malloc(sizeof(PointSet));
+    }
 }
 
 void cudaGenetic() {
@@ -859,6 +871,7 @@ void cudaGenetic() {
     else initTimes();
     
     generateInitialPopulation(gpu_P);
+    evaluate(gpu_P, (char*)"eval just after init");
     
     int it = 0;
     while (true) {
