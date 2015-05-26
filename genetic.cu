@@ -30,7 +30,7 @@ Albert Puente Encinas
 
 // Genetic algorithm parameters
 #define N 2048
-#define N_POINTS 128
+#define N_POINTS 1024
 #define ITERATION_LIMIT 50
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
@@ -140,9 +140,12 @@ __device__ bool cuda_collides(Point* p, PointSet* PS, int from, int to, Obstacle
 }
 
 __global__ void kernel_generateInitialPopulation(Population* P, 
-                    Obstacle* obstacles, curandState* state) {
+                    Obstacle* obstacles, int* idxs, curandState* state) {
     
     int id = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // Indexs initialization
+    idxs[id] = id;
     
     curandState localState = state[id];
     
@@ -184,7 +187,7 @@ __global__ void setup_kernel(curandState *state) {
     curand_init ( 1234, id, 0, &state[id] );
 }
 
-void generateInitialPopulation(Population* gpu_P) {
+void generateInitialPopulation(Population* gpu_P, int* gpu_idxs) {
     tic(&initialGenTime);
     
     //RANDOM SETUP
@@ -195,7 +198,8 @@ void generateInitialPopulation(Population* gpu_P) {
     //RANDOM END
     
     // kernel 
-    kernel_generateInitialPopulation<<<nBlocks, nThreads>>>(gpu_P, gpu_obstacles, devStates);
+    kernel_generateInitialPopulation<<<nBlocks, nThreads>>>(gpu_P, gpu_obstacles, 
+                                                            gpu_idxs, devStates);
     checkCudaError((char *) "kernel call in generateInitialPopulation");
     
     // wait
@@ -242,23 +246,16 @@ void evaluate(Population* gpu_P) {
 #define MAX_DEPTH       16
 #define INSERTION_SORT  32
 
-__device__ void swap_pointSets(PointSet* a, PointSet* b) {
-    PointSet aux = *a;
-    *a = *b;
-    *b = aux;
-}
-
-
 // Selection sort used when depth gets too big or the number of elements drops
 // below a threshold.
-__device__ void selection_sort(Population* P, int left, int right ) {
+__device__ void selection_sort(Population* P, int* idxs, int left, int right ) {
     for (int i = left ; i <= right ; ++i) {
-        float min_score = P->pointSets[i].score;
+        float min_score = P->pointSets[ idxs[i] ].score;
         int min_idx = i;
 
         // Find the smallest value in the range [left, right].
         for (int j = i + 1 ; j <= right ; ++j) {
-            float score_j = P->pointSets[j].score;
+            float score_j = P->pointSets[ idxs[j] ].score;
             if (score_j < min_score) {
                 min_idx = j;
                 min_score = score_j;
@@ -267,46 +264,48 @@ __device__ void selection_sort(Population* P, int left, int right ) {
 
         // Swap the values.
         if (i != min_idx) {
-            swap_pointSets(&P->pointSets[i], &P->pointSets[min_idx]);
+            int aux = idxs[i];
+            idxs[i] = idxs[min_idx];
+            idxs[min_idx] = aux;
         }
     }
 }
 
-__global__ void dynamic_quicksort(Population* P, int left, int right, int depth) {
+__global__ void dynamic_quicksort(Population* P, int* idxs, int left, int right, int depth) {
     // If we're too deep or there are few elements left, we use an insertion sort...
     if (depth >= MAX_DEPTH || right - left <= INSERTION_SORT) {
-        selection_sort(P, left, right);
+        selection_sort(P, idxs, left, right);
         return;
     }
     
     int lindex = left;
     int rindex = right;
-    float pscore = P->pointSets[(left+right)/2].score; // Pivot
+    float pscore = P->pointSets[ idxs[(left+right)/2] ].score; // Pivot
 
     // Do the partitioning.
     while (lindex <= rindex) {
         // Find the next left- and right-hand values to swap
-        float lscore = P->pointSets[lindex].score; 
-        float rscore = P->pointSets[rindex].score;
+        float lscore = P->pointSets[ idxs[lindex] ].score; 
+        float rscore = P->pointSets[ idxs[rindex] ].score;
 
         // Move the left pointer as long as the pointed element is smaller than the pivot.
         while (lscore < pscore) {
             lindex++;
-            lscore = P->pointSets[lindex].score; 
+            lscore = P->pointSets[ idxs[lindex] ].score; 
         }
 
         // Move the right pointer as long as the pointed element is larger than the pivot.
         while (rscore > pscore) {
             rindex--;
-            rscore = P->pointSets[rindex].score;
+            rscore = P->pointSets[ idxs[rindex] ].score;
         }
 
         // If the swap points are valid, do the swap!
         if (lindex <= rindex) {
             
-            // FOR GOD'S SAKE; This needs to be improved, we can sort a vector
-            // of indices instead of copying the whole pointSets.
-            swap_pointSets(&P->pointSets[lindex], &P->pointSets[rindex]);
+            int aux = idxs[lindex];
+            idxs[lindex] = idxs[rindex];
+            idxs[rindex] = aux;
             
             lindex++;
             rindex--;
@@ -318,7 +317,7 @@ __global__ void dynamic_quicksort(Population* P, int left, int right, int depth)
     if (left < rindex) {
         cudaStream_t s;
         cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking);
-        dynamic_quicksort<<< 1, 1, 0, s >>>(P, left, rindex, depth + 1);
+        dynamic_quicksort<<< 1, 1, 0, s >>>(P, idxs, left, rindex, depth + 1);
         cudaStreamDestroy(s);
     }
 
@@ -326,21 +325,50 @@ __global__ void dynamic_quicksort(Population* P, int left, int right, int depth)
     if (lindex < right) {
         cudaStream_t s1;
         cudaStreamCreateWithFlags(&s1, cudaStreamNonBlocking);
-        dynamic_quicksort<<< 1, 1, 0, s1 >>>(P, lindex, right, depth + 1);
+        dynamic_quicksort<<< 1, 1, 0, s1 >>>(P, idxs, lindex, right, depth + 1);
         cudaStreamDestroy(s1);
     }
 }
 
+__global__ void copyBestPointSet(Population* P, int* idxs, PointSet* best) {
+    *best = P->pointSets[ idxs[0] ];
+}
 
-void sort(Population* gpu_P) {
+__global__ void checkSort(Population* P, int* idxs) {
+    for (int i = 1; i < N; ++i) {
+       float a = P->pointSets[ idxs[i - 1] ].score;
+       float b = P->pointSets[ idxs[i] ].score;
+       if (a > b) printf("SORT IS NOT WORKING\n");
+    }
+}
+
+
+void sort(Population* gpu_P, int* gpu_idxs, PointSet* best) {
     tic(&sortingTime);
     
     // Prepare CDP for the max depth 'MAX_DEPTH'.
     cudaDeviceSetLimit(cudaLimitDevRuntimeSyncDepth, MAX_DEPTH);
     
-    dynamic_quicksort<<<1, 1>>>(gpu_P, 0, N-1, 0);
-    checkCudaError((char *) "kernel call in mutate");
+    dynamic_quicksort<<<1, 1>>>(gpu_P, gpu_idxs, 0, N-1, 0);
+    checkCudaError((char *) "kernel call in sort");
     cudaDeviceSynchronize();
+   
+    //checkSort<<<1, 1>>>(gpu_P, gpu_idxs);
+    //cudaDeviceSynchronize();
+    //checkCudaError((char *) "check sort");
+    
+    PointSet* gpu_best;
+    cudaMalloc(&gpu_best, sizeof(PointSet));
+    checkCudaError((char *) "cudaMalloc bestPointSet");
+    
+    copyBestPointSet<<<1, 1>>>(gpu_P, gpu_idxs, gpu_best);
+    checkCudaError((char *) "kernel copy best pointset");
+    cudaDeviceSynchronize();
+    
+    cudaMemcpy(best, gpu_best, sizeof(PointSet), cudaMemcpyDeviceToHost);
+    checkCudaError((char *) "copy of best point set");
+    cudaDeviceSynchronize();
+    
     toc(&sortingTime);
 }
 
@@ -439,15 +467,16 @@ __device__ void randomMove(PointSet* AP, PointSet* AQ, Obstacle* obstacles,
     } 
 }
 
-__global__ void kernel_mutate(Population* P, Population* Q, Obstacle* obstacles,
-                                    curandState* state) {
+__global__ void kernel_mutate(Population* P, Population* Q, Obstacle* obstacles, 
+                                                             curandState* state) {
     
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     
     curandState localState = state[id];
     
     PointSet* AP = &P->pointSets[id];    // original points
-    PointSet* AQ = &Q->pointSets[id];    // mutated points
+    PointSet* AQ = &Q->pointSets[id];    // mutated points    
+    
     if (cuda_randomChoice(POINT_SET_MUTATION_PROB, &localState)) { // Mutate
         if (cuda_randomChoice(0.5f, &localState)) {
             mix(AP, AQ, obstacles, &localState);
@@ -499,23 +528,26 @@ __device__ void pork(PointSet* p1, PointSet* p2, PointSet* child, curandState* l
     }
 }
 
-__global__ void kernel_reproduce(Population* P, Population* Q, curandState* state) {
+__global__ void kernel_reproduce(Population* P, Population* Q, int* idxs, 
+                                                        curandState* state) {
     
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     
-    if (id < N_SURVIVORS) {
+    if (idxs[id] < N_SURVIVORS) {
         Q->pointSets[id] = P->pointSets[id];
     }
     else {
         curandState localState = state[id];
-        PointSet* p1 = &P->pointSets[(unsigned int) (CURAND*(N_SURVIVORS-1))];
-        PointSet* p2 = &P->pointSets[(unsigned int) (CURAND*(N_SURVIVORS-1))];        
+        int ip1 = idxs[(unsigned int) (CURAND*(N_SURVIVORS-1))];
+        PointSet* p1 = &P->pointSets[ip1];
+        int ip2 = idxs[(unsigned int) (CURAND*(N_SURVIVORS-1))];
+        PointSet* p2 = &P->pointSets[ip2];        
         PointSet* child = &Q->pointSets[id];
         pork(p1, p2, child, &localState);
     }
 }
 
-void reproduce(Population* gpu_P, Population* gpu_Q) {
+void reproduce(Population* gpu_P, Population* gpu_Q, int* gpu_idxs) {
     tic(&reproductionTime);
     
     //RANDOM SETUP
@@ -526,19 +558,11 @@ void reproduce(Population* gpu_P, Population* gpu_Q) {
     //RANDOM END
     
     // kernel 
-    kernel_reproduce<<<nBlocks, nThreads>>>(gpu_P, gpu_Q, devStates);
+    kernel_reproduce<<<nBlocks, nThreads>>>(gpu_P, gpu_Q, gpu_idxs, devStates);
     checkCudaError((char *) "kernel call in mutate");   
     cudaDeviceSynchronize();
     
     toc(&reproductionTime);
-}
-
-void getBestFromGPU(Population* gpu_P, PointSet* best) {
-    
-    // ?????????????????????????????????????????????????????????????? 
-    cudaMemcpy(best, gpu_P, sizeof(PointSet), cudaMemcpyDeviceToHost);
-    checkCudaError((char *) "gpu -> host getBestFromGPU");    
-    cudaDeviceSynchronize();
 }
 
 void DUMPInitialParams() {
@@ -616,19 +640,23 @@ void cudaGenetic() {
     cudaMalloc((void **) &gpu_Q, sizeof(Population));
     checkCudaError((char *) "cudaMalloc of Q");    
     
+    int* gpu_idxs;
+    cudaMalloc((void **) &gpu_idxs, sizeof(int)*N);
+    checkCudaError((char *) "cudaMalloc of idxs"); 
+    
     PointSet* bestPointSet = (PointSet*) malloc(sizeof(PointSet));
 
     if (DUMP) DUMPInitialParams();
     else initTimes();
     
-    generateInitialPopulation(gpu_P);
+    generateInitialPopulation(gpu_P, gpu_idxs);
     
     int it = 0;
     while (true) {
         mutate(gpu_P, gpu_Q);
         evaluate(gpu_Q);
-        sort(gpu_Q);        
-        getBestFromGPU(gpu_Q, bestPointSet);
+        
+        sort(gpu_Q, gpu_idxs, bestPointSet);
         
         if (DUMP) dump(bestPointSet);
         else {            
@@ -642,7 +670,7 @@ void cudaGenetic() {
         // reproduce replaces the worst candidates with combinations
         // of better ones. from Q to P, so the population ends up in P
         // prepared for the next iteration
-        reproduce(gpu_Q, gpu_P);
+        reproduce(gpu_Q, gpu_P, gpu_idxs);
         it++;
     }
     // The result is bestPointSet
