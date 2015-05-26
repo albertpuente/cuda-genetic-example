@@ -89,7 +89,7 @@ typedef struct {
 } PointSet;
 
 typedef struct {
-    PointSet* pointSets[N];
+    PointSet pointSets[N];
     float maxScore;
 } Population;
 
@@ -142,14 +142,6 @@ __device__ bool cuda_collides(Point* p, PointSet* PS, int from, int to, Obstacle
     return false;
 }
 
-__device__ inline PointSet* candidate(Population* p, int ix) {
-    return p->pointSets[ix];
-}
-
-__host__ inline PointSet* candidateH(Population* p, int ix) {
-    return p->pointSets[ix];
-}
-
 __global__ void kernel_generateInitialPopulation(Population* P, 
                     Obstacle* obstacles, curandState* state) {
     
@@ -168,7 +160,7 @@ __global__ void kernel_generateInitialPopulation(Population* P,
     */
     
     for (int j = 0; j < N_POINTS; ++j) {
-        PointSet* PS = candidate(P, id); // &(P->pointSets[id]);
+        PointSet* PS = &(P->pointSets[id]);
         Point* p = &(PS->points[j]); // p is passed to 'collides' via PS
         p->x = CURAND * range + 12.5;
         p->y = CURAND * range + 12.5;
@@ -226,7 +218,7 @@ __device__ inline float heur_2(Point* P, Point* destination) {
 __global__ void kernel_evaluate(Population* P, Point* destination) {
     
     int id = blockIdx.x * blockDim.x + threadIdx.x;
-    PointSet* C = candidate(P, id); //&P->pointSets[id];
+    PointSet* C = &P->pointSets[id];
     C->score = 0;
     for (int j = 0; j < N_POINTS; j++) {
         Point* E = &C->points[j];
@@ -265,6 +257,9 @@ __device__ void swap_pointSets_jan(PointSet*a, PointSet* b) {
     b = aux;
 } 
 
+__device__ inline PointSet* candidate(Population* p, int ix) {
+    return &p->pointSets[ix];
+}
 
 __device__ inline void swapCandidates(Population* p, int i, int j) {
     float a = candidate(p, i)->score;
@@ -279,12 +274,12 @@ __device__ inline void swapCandidates(Population* p, int i, int j) {
 // below a threshold.
 __device__ void selection_sort(Population* P, int left, int right ) {
     for (int i = left ; i <= right ; ++i) {
-        float min_score = candidate(P, i)->score;
+        float min_score = P->pointSets[i].score;
         int min_idx = i;
 
         // Find the smallest value in the range [left, right].
         for (int j = i + 1 ; j <= right ; ++j) {
-            float score_j = candidate(P, j)->score; //P->pointSets[j].score;
+            float score_j = P->pointSets[j].score;
             if (score_j < min_score) {
                 min_idx = j;
                 min_score = score_j;
@@ -293,7 +288,7 @@ __device__ void selection_sort(Population* P, int left, int right ) {
 
         // Swap the values.
         if (i != min_idx) {
-            swap_pointSets(P->pointSets[i], P->pointSets[min_idx]);
+            swap_pointSets(&P->pointSets[i], &P->pointSets[min_idx]);
         }
     }
 }
@@ -481,26 +476,26 @@ __global__ void dynamic_quicksort(Population* P, int left, int right, int depth)
     
     int lindex = left;
     int rindex = right;
-    float pscore = candidate(P, (left+right)/2)->score; //P->pointSets[(left+right)/2].score; // Pivot
+    float pscore = P->pointSets[(left+right)/2].score; // Pivot
 
     // Do the partitioning.
     while (lindex <= rindex) {
         // Find the next left- and right-hand values to swap
-        float lscore = candidate(P, lindex)->score; //P->pointSets[lindex].score; 
-        float rscore = candidate(P, rindex)->score; //P->pointSets[rindex].score;
+        float lscore = P->pointSets[lindex].score; 
+        float rscore = P->pointSets[rindex].score;
 
         // Move the left pointer as long as the pointed element is smaller than the pivot.
         // TODO: dicotomic search
         while (lscore < pscore) {
             lindex++;
-            lscore = candidate(P, lindex)->score; ///P->pointSets[lindex].score; 
+            lscore = P->pointSets[lindex].score; 
         }
 
         // Move the right pointer as long as the pointed element is larger than the pivot.
         // TODO: dicotomic search
         while (rscore > pscore) {
             rindex--;
-            rscore = candidate(P, rindex)->score; //P->pointSets[rindex].score;
+            rscore = P->pointSets[rindex].score;
         }
 
         // If the swap points are valid, do the swap!
@@ -508,9 +503,8 @@ __global__ void dynamic_quicksort(Population* P, int left, int right, int depth)
             
             // TODO: This needs to be improved, we can sort a vector
             // of indices instead of copying the whole pointSets.
-            //swap_pointSets(&P->pointSets[lindex], &P->pointSets[rindex]);
-            swap_pointSets(P->pointSets[lindex], P->pointSets[rindex]);
-          
+            swap_pointSets(&P->pointSets[lindex], &P->pointSets[rindex]);
+            
             lindex++;
             rindex--;
         }
@@ -650,8 +644,8 @@ __global__ void kernel_mutate(Population* P, Population* Q, Obstacle* obstacles,
     
     curandState localState = state[id];
     
-    PointSet* AP = candidate(P, id); //&P->pointSets[id];    // original points
-    PointSet* AQ = candidate(P, id); //&Q->pointSets[id];    // mutated points
+    PointSet* AP = &P->pointSets[id];    // original points
+    PointSet* AQ = &Q->pointSets[id];    // mutated points
     if (cuda_randomChoice(POINT_SET_MUTATION_PROB, &localState)) { // Mutate
         if (cuda_randomChoice(0.5f, &localState)) {
             mix(AP, AQ, obstacles, &localState);
@@ -712,11 +706,9 @@ __global__ void kernel_reproduce(Population* P, Population* Q, curandState* stat
     }
     else {
         curandState localState = state[id];
-        int ix1 = (unsigned int) (CURAND*(N_SURVIVORS-1));
-        int ix2 = (unsigned int) (CURAND*(N_SURVIVORS-1));
-        PointSet* p1 = candidate(P, ix1); // &P->pointSets[ix1];
-        PointSet* p2 = candidate(P, ix2); // &P->pointSets[ix2];        
-        PointSet* child = candidate(Q, id); // &Q->pointSets[id];
+        PointSet* p1 = &P->pointSets[(unsigned int) (CURAND*(N_SURVIVORS-1))];
+        PointSet* p2 = &P->pointSets[(unsigned int) (CURAND*(N_SURVIVORS-1))];        
+        PointSet* child = &Q->pointSets[id];
         pork(p1, p2, child, &localState);
     }
 }
