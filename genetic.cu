@@ -142,24 +142,12 @@ __device__ bool cuda_collides(Point* p, PointSet* PS, int from, int to, Obstacle
     return false;
 }
 
-__device__ void printPoint(Point* p) {
-    printf("x = %f, y = %f, z = %f\n", p->x, p->y, p->z);
-}
-
-
 __device__ inline PointSet* candidate(Population* p, int ix) {
     return p->pointSets[ix];
 }
 
 __host__ inline PointSet* candidateH(Population* p, int ix) {
     return p->pointSets[ix];
-}
-
-__device__ void printPoints(PointSet* P) {
-    for (int i = 0; i < N_POINTS; ++i) {
-        printPoint(&P->points[i]);
-    }
-    printf("\n");
 }
 
 __global__ void kernel_generateInitialPopulation(Population* P, 
@@ -178,14 +166,11 @@ __global__ void kernel_generateInitialPopulation(Population* P,
     
     printf("%f %f %f\n", r1, r2, r3);
     */
-    PointSet* PS = candidate(P, id); // &(P->pointSets[id]);
-     if (id == 0) {printf("before\n");
-         printPoints(PS);
-     }
-     for (int j = 0; j < N_POINTS; ++j) {
+    
+    for (int j = 0; j < N_POINTS; ++j) {
+        PointSet* PS = candidate(P, id); // &(P->pointSets[id]);
         Point* p = &(PS->points[j]); // p is passed to 'collides' via PS
-        float px = CURAND * range + 12.5;
-        p->x = px;
+        p->x = CURAND * range + 12.5;
         p->y = CURAND * range + 12.5;
         p->z = CURAND * range + 12.5;
         
@@ -201,10 +186,6 @@ __global__ void kernel_generateInitialPopulation(Population* P,
             //exit(1);
         }
     }
-    if (id == 0) {printf("after\n");
-        printPoints(PS);
-    }
- 
 }
 
 __global__ void setup_kernel(curandState *state) {
@@ -224,7 +205,7 @@ void generateInitialPopulation(Population* gpu_P) {
     checkCudaError((char *) "setup random kernel");    
     //RANDOM END
     
-      // kernel 
+    // kernel 
     kernel_generateInitialPopulation<<<nBlocks, nThreads>>>(gpu_P, gpu_obstacles, devStates);
     checkCudaError((char *) "kernel call in generateInitialPopulation");
     
@@ -242,36 +223,16 @@ __device__ inline float heur_2(Point* P, Point* destination) {
     return cuda_dist(P, destination);
 }
 
-// __global__ void kernel_evaluate(Population* P, Point* destination) {
-    
-//     int id = blockIdx.x * blockDim.x + threadIdx.x;
-//     PointSet* C = candidate(P, id); //&P->pointSets[id];
-//     C->score = 0;
-//     for (int j = 0; j < N_POINTS; j++) {
-//         Point* E = &C->points[j];
-//         C->score += heur_2(E, destination);
-//     }
-//     printf("final score = %f\n", C->score);
-// }
-
-
 __global__ void kernel_evaluate(Population* P, Point* destination) {
+    
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     PointSet* C = candidate(P, id); //&P->pointSets[id];
-    if (id == 0) {
-        printf("evaluate\n");
-        printPoints(C);
-    }
     C->score = 0;
     for (int j = 0; j < N_POINTS; j++) {
         Point* E = &C->points[j];
-        float inc = heur_2(E, destination);
-        C->score += inc;
-        //printf("incr = %f\n", inc);
+        C->score += heur_2(E, destination);
     }
-   // printf("final score = %f\n", C->score);
 }
-
 
 void evaluate(Population* gpu_P) {
     tic(&evaluationTime);
@@ -845,11 +806,6 @@ void initDestinationPoint() {
     checkCudaError((char *) "host -> gpu in initDestinationPoint");
 }
 
-__global__ void mallocPointSets(Population* P) {
-    for (int i = 0; i < N; ++i) 
-        P->pointSets[i] = (PointSet*) malloc(sizeof(PointSet));
-}
-
 void cudaGenetic() {
     srand(SEED);  
     
@@ -866,11 +822,6 @@ void cudaGenetic() {
     cudaMalloc((void **) &gpu_Q, sizeof(Population));
     checkCudaError((char *) "cudaMalloc of Q");    
     
-    // pointSets cudaMalloc
-    mallocPointSets<<<1,1>>> (gpu_P);
-    mallocPointSets<<<1,1>>> (gpu_Q);
-
-
     PointSet* bestPointSet = (PointSet*) malloc(sizeof(PointSet));
 
     if (DUMP) DUMPInitialParams();
