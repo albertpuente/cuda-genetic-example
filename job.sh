@@ -5,7 +5,7 @@
 # Asegurar que el job mantiene las variables de entorno del shell lamador
 #$ -V
 # Cambiar el nombre del job
-#$ -N SESION02-Kernel01 
+#$ -N GENPAR 
 # Cambiar el shell
 #$ -S /bin/bash
 

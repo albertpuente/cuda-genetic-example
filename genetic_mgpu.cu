@@ -40,6 +40,7 @@ Albert Puente Encinas
 #define OBSTACLE_RADIUS 2.0
 #define MAX_DELTA 2
 #define MAX_TRIES 1e3   // max amount of times we tries to find a position for a point
+#define NUM_GPUS 1 // number of gpus used
 
 // Obstacles
 #define CHECK_OBSTACLES true
@@ -634,19 +635,22 @@ void cudaGenetic() {
     tic(&totalTime);   
     
     // Malloc
-    Population* gpu_P;
-    Population* gpu_Q;
-    cudaMalloc((void **) &gpu_P, sizeof(Population));
-    checkCudaError((char *) "cudaMalloc of P");
-    cudaMalloc((void **) &gpu_Q, sizeof(Population));
-    checkCudaError((char *) "cudaMalloc of Q");    
+    for (int i = 0; i < NUM_GPUS; ++i) {
+        cudaSetDevice(i);
+        
+        Population* gpu_P;
+        Population* gpu_Q;
+        cudaMalloc((void **) &gpu_P, sizeof(Population));
+        checkCudaError((char *) "cudaMalloc of P");
+        cudaMalloc((void **) &gpu_Q, sizeof(Population));
+        checkCudaError((char *) "cudaMalloc of Q");    
     
-    int* gpu_idxs;
-    cudaMalloc((void **) &gpu_idxs, sizeof(int)*N);
-    checkCudaError((char *) "cudaMalloc of idxs"); 
+        int* gpu_idxs;
+        cudaMalloc((void **) &gpu_idxs, sizeof(int)*N);
+        checkCudaError((char *) "cudaMalloc of idxs"); 
     
-    PointSet* bestPointSet = (PointSet*) malloc(sizeof(PointSet));
-
+        PointSet* bestPointSet = (PointSet*) malloc(sizeof(PointSet));
+    }
     if (DUMP) DUMPInitialParams();
     else initTimes();
     

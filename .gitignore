@@ -8,3 +8,4 @@
 !genetic.cu
 !geneticViewer.c
 !Makefile
+!genetic_mgpu.cu
