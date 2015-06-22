@@ -25,18 +25,20 @@ Albert Puente Encinas
 #include <math.h>   // e.g. sin, abs
 #include <sys/time.h>
 
+#define DUMP false
+
 // Genetic algorithm parameters
-#define N 1024*8
-#define N_POINTS 1024
-#define ITERATION_LIMIT 200
+#define N 1024*16
+#define N_POINTS 256*4
+#define ITERATION_LIMIT 2
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
-#define POINT_MUTATION_PROB 0.01
+#define POINT_MUTATION_PROB 0.25
 #define N_SURVIVORS N/4
-#define POINT_RADIUS 0.25
+#define POINT_RADIUS 0.2
 #define OBSTACLE_RADIUS 2.0
 #define MAX_DELTA 2
-#define MAX_TRIES 1e3   // max amount of times we tries to find a position for a point
+#define MAX_TRIES 1e4   // max amount of times we tries to find a position for a point
 
 // Obstacles
 #define CHECK_OBSTACLES true
@@ -66,9 +68,6 @@ inline void tic(unsigned long long* time) {
     
 }
 #define toc tic
-
-// Output toggles
-bool DUMP;
 
 typedef struct {
     float x, y, z; // Position
@@ -463,7 +462,6 @@ void initObstacles() {
 }
 
 int main(int argc, char** argv) {
-    DUMP = (argc == 1);
     initObstacles();
     sequentialGenetic();
     return 0;

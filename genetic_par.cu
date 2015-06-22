@@ -1,7 +1,11 @@
 /*
-Compile:
-    
-    make 
+Compile with: 
+
+    gcc genetic.c -o genetic -O2 -lm -std=c99 
+
+    -O2      Optimization
+    -lm      Link to math lib
+    -std=c99 Use of for(;;;) with declaration among other things
 
 Usage (3D viewer):
 
@@ -24,25 +28,17 @@ Albert Puente Encinas
 #include <curand_kernel.h>
 #define CURAND curand_uniform(&localState)
 
-#define MULTI_GPU true
-#define DUMP true
-
 // Genetic algorithm parameters
-#define N 1024*2
-#define N_POINTS 256*2
-#define ITERATION_LIMIT 1200
+#define N 1024*10
+#define N_POINTS 1024*10
+#define ITERATION_LIMIT 200
 #define GOAL_SCORE -1.0
 #define POINT_SET_MUTATION_PROB 0.5
-#define POINT_MUTATION_PROB 0.25
+#define POINT_MUTATION_PROB 0.01
 #define N_SURVIVORS N/4
-#define POINT_RADIUS 0.1
+#define POINT_RADIUS 0.25
 #define OBSTACLE_RADIUS 2.0
 #define MAX_DELTA 2
-#define MAX_TRIES 1e4   // max amount of times we tries to find a position for a point
-
-// Obstacles
-#define CHECK_OBSTACLES true
-#define CHECK_COLLISIONS false
 
 // Deterministic algorithm (testing purposes)
 #define SEED 27
@@ -52,12 +48,6 @@ Albert Puente Encinas
 #define bool int
 #define true 1
 #define false 0
-
-// MultiGPU
-#define ForEachGPU for (int GPU_X = 0; GPU_X < nGPUs; ++GPU_X)
-unsigned int bestGPU;
-int* seeds;
-curandState** devStates;
 
 // Timers
 unsigned long long mutationTime;
@@ -75,8 +65,12 @@ inline void tic(unsigned long long* time) {
 #define toc tic
 //inline void toc(unsigned long long* time) { tic(time); }
 
+// Output toggles
+bool DUMP;
+
 typedef struct {
     float x, y, z; // Position
+    float score;
 } Point;
 
 typedef struct {
@@ -94,23 +88,31 @@ typedef struct {
     float radius;
 } Obstacle;
 
+// Obstacles
+#define CHECK_OBSTACLES true
 #define N_OBSTACLES 27
-Obstacle obstacles[N_OBSTACLES];
+Obstacle cpu_obstacles[N_OBSTACLES];
+
+// target position our points try to get to
 Point destination;
 
 // CUDA Variables
 unsigned int nThreads = 1024;
 unsigned int nBlocks = N/nThreads;  // N multiple de nThreads
-int nGPUs;
+    
 // GPU Pointers
-Obstacle** gpu_obstacles;
-Point** gpu_destination;
+Obstacle* gpu_obstacles;
+Point* gpu_destination;
+curandState *devStates;
 
+
+// returns true with probability=probability(0,1), false otherwise
 __device__ inline bool cuda_randomChoice(float probability, curandState* localState) {
     if (curand_uniform(localState) <= probability) return true;
     else return false;    
 }
 
+// check if an error occured, print msg
 void checkCudaError(char msg[]) {
     cudaError_t error;
     error = cudaGetLastError();
@@ -120,6 +122,7 @@ void checkCudaError(char msg[]) {
     }
 }
 
+// squared dist, faster than euclidean dist and serves the same purpose
 __device__ inline float cuda_squared_dist(Point* a, Point* b) {
     return (float) (a->x-b->x)*(a->x-b->x)+(a->y-b->y)*(a->y-b->y)+(a->z-b->z)*(a->z-b->z);
 }
@@ -137,89 +140,63 @@ __device__ bool collidesWithObstacles(Point* p, Obstacle* obstacles) {
     return false;
 }
 
-__device__ bool cuda_collides(Point* p, PointSet* PS, int from, int to, Obstacle* obstacles) {
-    float squared_d = (POINT_RADIUS*POINT_RADIUS)*4;
-    if (CHECK_COLLISIONS)
-        for (int i = from; i < to; ++i) {
-            if (cuda_squared_dist(p, &PS->points[i]) < squared_d) {
-                return true;
-            }
-        }
-    if (CHECK_OBSTACLES)
-        for (int i = 0; i < N_OBSTACLES; ++i) {
-            Obstacle o = obstacles[i];
-            if (cuda_squared_dist(p, &o.centre) < (POINT_RADIUS + o.radius)*(POINT_RADIUS + o.radius)) {
-                return true;
-            }
-        }
-    return false;
+__global__ void kernel_generatePointSetMembers(PointSet* PS, float range, Obstacle* obstacles, curandState* state) {
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    curandState localState = state[id]; // al threads share this atm
+    
+    Point* p = &(PS->points[id]);
+    p->x = CURAND * range + 12.5;
+    p->y = CURAND * range + 12.5;
+    p->z = CURAND * range + 12.5;
+    
+    // prolly inefficient af
+    while (collidesWithObstacles(p, obstacles)) {
+        p->x = CURAND * range + 12.5;
+        p->y = CURAND * range + 12.5;
+        p->z = CURAND * range + 12.5;
+    }
 }
 
+// initial population generation kernel
 __global__ void kernel_generateInitialPopulation(Population* P, 
                     Obstacle* obstacles, int* idxs, curandState* state) {
     
     int id = blockIdx.x * blockDim.x + threadIdx.x;
-    
+    PointSet* PS = &(P->pointSets[id]);
+    curandState* localState = &(state[id*N_POINTS]);
     // Indexs initialization
     idxs[id] = id;
+
+    int n_threads = 128; //?
+    int n_blocks = N_POINTS / n_threads;
+    float range = POINT_RADIUS * pow((float)N_POINTS, 1.0f/3.0f) * 10;   
     
-    curandState localState = state[id];
-    
-    float range = POINT_RADIUS * pow((float)N_POINTS, 1.0f/3.0f) * 10;    
-    
-    /*
-    float r1 = curand_uniform(&localState)/(float)(RAND_MAX);
-    float r2 = curand_uniform(&localState);///(float)(RAND_MAX);
-    float r3 = curand_uniform(&localState);///(float)(RAND_MAX);
-    
-    printf("%f %f %f\n", r1, r2, r3);
-    */
-    
-    for (int j = 0; j < N_POINTS; ++j) {
-        PointSet* PS = &(P->pointSets[id]);
-        Point* p = &(PS->points[j]); // p is passed to 'collides' via PS
-        p->x = CURAND * range + 12.5;
-        p->y = CURAND * range + 12.5;
-        p->z = CURAND * range + 12.5;
-        
-        int tries = 0;
-        while (tries < MAX_TRIES && cuda_collides(p, PS, 0, j, obstacles)) {
-            p->x = CURAND * range + 12.5;
-            p->y = CURAND * range + 12.5;
-            p->z = CURAND * 5.0 + 12.5;
-            ++tries;
-        }
-        if (tries == MAX_TRIES) {
-            printf("Error during the generation of the initial population, MAX TRIES REACHED\n");
-            //exit(1);
-        }
-    }
+    kernel_generatePointSetMembers<<<n_threads, n_blocks>>>(PS, range, obstacles, localState);
 }
 
-__global__ void setup_kernel(curandState *state, int seed) {
+__global__ void kernel_randSetup(curandState *state) {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     /* Each thread gets same seed, a different sequence 
        number, no offset */
-    curand_init (seed, id, 0, &state[id] );
+    curand_init ( 1234, id, 0, &state[id] );
 }
 
-void generateInitialPopulation(Population** gpu_P, int** gpu_idxs) {
+void generateInitialPopulation(Population* gpu_P, int* gpu_idxs) {
     tic(&initialGenTime);
-       
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        // kernel 
-        kernel_generateInitialPopulation<<<nBlocks, nThreads>>>(gpu_P[GPU_X],
-                                                                gpu_obstacles[GPU_X], 
-                                                                gpu_idxs[GPU_X],
-                                                                devStates[GPU_X]);
-        checkCudaError((char *) "kernel call in generateInitialPopulation\n");
-    }
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaDeviceSynchronize();
-    }
-
+    
+    //RANDOM SETUP
+    cudaMalloc((void **)&devStates, N * N_POINTS * sizeof(curandState));
+    kernel_randSetup<<<nBlocks, nThreads>>>(devStates);
+    checkCudaError((char *) "generateInitialPopulation: random setup kernel");    
+    //RANDOM END
+    
+    // kernel 
+    kernel_generateInitialPopulation<<<nBlocks, nThreads>>>(gpu_P, gpu_obstacles, 
+                                                            gpu_idxs, devStates);
+    checkCudaError((char *) "kernel call in generateInitialPopulation");
+    
+    // wait
+    cudaDeviceSynchronize();
     toc(&initialGenTime);
 }
 
@@ -227,38 +204,79 @@ __device__ inline float heur_1(Point* P) {
     return fabs(P->y - 3.0*sin(P->x/2.0)) + fabs(P->z - 3.0*cos(P->x/2.0));
 }
 
-
 __device__ inline float heur_2(Point* P, Point* destination) {
     return cuda_squared_dist(P, destination);
 }
 
-__global__ void kernel_evaluate(Population* P, Point* destination) {
-    
+
+/* ---------------------USING THESE IS SLOW ---------------------*/
+__global__ void kernel_evaluatePointSet(PointSet* PS, Point* destination) {
     int id = blockIdx.x * blockDim.x + threadIdx.x;
-    PointSet* C = &P->pointSets[id];
-    C->score = 0;
-    for (int j = 0; j < N_POINTS; j++) {
-        Point* E = &C->points[j];
-        C->score += heur_2(E, destination);
-    }
+    
+    Point* P = &(PS->points[id]);
+    P->score = heur_2(P, destination);
+    atomicAdd(&(PS->score), P->score);
 }
 
-void evaluate(Population** gpu_P) {
+__global__ void kernel_evaluatePopulation(Population* P, Point* destination) {    
+    int id = blockIdx.x * blockDim.x + threadIdx.x;
+    PointSet* PS = &P->pointSets[id];
+    int n_threads = 1024; //?
+    int n_blocks = N_POINTS / n_threads;
+    PS->score = 0;
+    kernel_evaluatePointSet<<<n_threads, n_blocks>>>(PS, destination);
+    
+    /* alternative to atomicAdd in kernel_evaluatePointSet, just as slow
+     * reduction would be another alternative, probably too slow too.
+    cudaDeviceSynchronize();
+    
+    int score = 0;
+    for (int j = 0; j < N_POINTS; j++) {
+       score += PS[j].score;
+    }
+    PS->score = score;
+    */
+}
+/* --------------------------------------------------------------- */
+
+__global__ void kernel_evaluatePopulationFlat(Population* P, Point* destination) {    
+    int ps_id = blockIdx.x * blockDim.x + threadIdx.x;
+    int point_id = blockIdx.y * blockDim.y + threadIdx.y;
+    
+    PointSet* PS = &P->pointSets[ps_id];
+    Point* p = &PS->points[point_id];
+    
+    if (point_id == 0) {
+        PS->score = 0;        
+    }
+    __syncthreads();
+    
+    float point_heur = heur_2(p, destination);
+    atomicAdd(&PS->score, point_heur);
+}
+
+void evaluate(Population* gpu_P) {
     tic(&evaluationTime);
     
-    // kernel
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        kernel_evaluate<<<nBlocks, nThreads>>>(gpu_P[GPU_X], gpu_destination[GPU_X]);
-        checkCudaError((char *) "kernel call in evaluate");
+    bool flat = false;
+    if (flat) {
+        int n_threads = 32; //sqrt(1024)
+        int width = N / n_threads;
+        int height = N_POINTS / n_threads;
+        // kernel
+        dim3 gridSize(width, height, 1);
+        dim3 blockSize(n_threads, n_threads, 1);
+        kernel_evaluatePopulationFlat<<<gridSize, blockSize>>>(gpu_P, gpu_destination);
+        checkCudaError((char *) "kernel call in generateInitialPopulation");
+    }
+    else {
+        // kernel 
+        kernel_evaluatePopulation<<<nBlocks, nThreads>>>(gpu_P, gpu_destination);
+        checkCudaError((char *) "kernel call in generateInitialPopulation");
     }
     
     // wait
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaDeviceSynchronize();
-    }
-    
+    cudaDeviceSynchronize();
     toc(&evaluationTime);
 }
 
@@ -366,54 +384,31 @@ __global__ void checkSort(Population* P, int* idxs) {
 }
 
 
-void sort(Population** gpu_P, int** gpu_idxs, PointSet** best) {
+void sort(Population* gpu_P, int* gpu_idxs, PointSet* best) {
     tic(&sortingTime);
     
-    ForEachGPU {
-        cudaSetDevice(GPU_X);        
-        dynamic_quicksort<<<1, 1>>>(gpu_P[GPU_X], gpu_idxs[GPU_X], 0, N-1, 0);
-        checkCudaError((char *) "kernel call in sort");
-    }
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaDeviceSynchronize();
-    }
+    // Prepare CDP for the max depth 'MAX_DEPTH'.
+    cudaDeviceSetLimit(cudaLimitDevRuntimeSyncDepth, MAX_DEPTH);
+    
+    dynamic_quicksort<<<1, 1>>>(gpu_P, gpu_idxs, 0, N-1, 0);
+    checkCudaError((char *) "kernel call in sort");
+    cudaDeviceSynchronize();
    
+    //checkSort<<<1, 1>>>(gpu_P, gpu_idxs);
+    //cudaDeviceSynchronize();
+    //checkCudaError((char *) "check sort");
     
-    PointSet** gpu_best = (PointSet**) malloc(nGPUs*sizeof(PointSet*));
+    PointSet* gpu_best;
+    cudaMalloc(&gpu_best, sizeof(PointSet));
+    checkCudaError((char *) "cudaMalloc bestPointSet");
     
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaMalloc(&gpu_best[GPU_X], sizeof(PointSet));
-        checkCudaError((char *) "cudaMalloc bestPointSet");
+    copyBestPointSet<<<1, 1>>>(gpu_P, gpu_idxs, gpu_best);
+    checkCudaError((char *) "kernel copy best pointset");
+    cudaDeviceSynchronize();
     
-        copyBestPointSet<<<1, 1>>>(gpu_P[GPU_X], gpu_idxs[GPU_X], gpu_best[GPU_X]);
-        checkCudaError((char *) "kernel copy best pointset");
-    }
-    
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaDeviceSynchronize();
-    }
-    
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaMemcpy(best[GPU_X], gpu_best[GPU_X], sizeof(PointSet), cudaMemcpyDeviceToHost);
-        checkCudaError((char *) "copy of best point set");
-    }
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaDeviceSynchronize();
-    }
-    
-    bestGPU = 0;
-    if (!DUMP) printf("GPU_0 score: %f\n", best[0]->score);
-    for (int i = 1; i < nGPUs; ++i) {
-        if (!DUMP) printf("GPU_%i score: %f\n", i, best[i]->score);
-        if (best[i]->score < best[bestGPU]->score) {
-            bestGPU = i;
-        }
-    }
+    cudaMemcpy(best, gpu_best, sizeof(PointSet), cudaMemcpyDeviceToHost);
+    checkCudaError((char *) "copy of best point set");
+    cudaDeviceSynchronize();
     
     toc(&sortingTime);
 }
@@ -429,6 +424,7 @@ __device__ void mix(PointSet* AP, PointSet* AQ, Obstacle* obstacles,
         }           
    
         int tries = 0;
+        int MAX_TRIES = 100;
         Point p;
         while (tries < MAX_TRIES) {            
             // Choose a reference point
@@ -465,11 +461,8 @@ __device__ void mix(PointSet* AP, PointSet* AQ, Obstacle* obstacles,
                 p.z = AP->points[i].z - dz;
             }
             // if the point doesn't collide with a point that has already moved
-            if (!cuda_collides(&p, AQ, 0, i, obstacles) &&
-                // and it doesn't collide with a point that has yet to be moved
-                // (this 2nd check prevents inconsistencies like a point being unable to move at all)
-                !cuda_collides(&p, AP, i + 1, N_POINTS, obstacles))
-                    break;
+            if (!collidesWithObstacles(&p, obstacles))
+                break;
             ++tries;
         }
         if (tries == MAX_TRIES) {
@@ -490,17 +483,15 @@ __device__ void randomMove(PointSet* AP, PointSet* AQ, Obstacle* obstacles,
             continue;
         }
         int tries = 0;
+        int MAX_TRIES = 100;
         Point p;
         while (tries < MAX_TRIES) {
             p.x = AP->points[i].x + (curand_uniform(localState)-0.5)*2*MAX_DELTA;
             p.y = AP->points[i].y + (curand_uniform(localState)-0.5)*2*MAX_DELTA;
             p.z = AP->points[i].z + (curand_uniform(localState)-0.5)*2*MAX_DELTA;
             // if the point doesn't collide with a point that has already moved
-            if (!cuda_collides(&p, AQ, 0, i, obstacles) &&
-                // and it doesn't collide with a point that has yet to be moved
-                // (this 2nd check prevents inconsistencies like a point being unable to move at all)
-                !cuda_collides(&p, AP, i + 1, N_POINTS, obstacles))
-                    break;
+            if (!collidesWithObstacles(&p, obstacles))
+                break;
             ++tries;
         }
         if (tries == MAX_TRIES) {
@@ -535,8 +526,6 @@ __global__ void kernel_mutate(Population* P, Population* Q, Obstacle* obstacles,
         *AQ = *AP;
     }
 }
-
-
 __device__ void mixFlat(Point* P, PointSet* AP, Point* Q, Obstacle* obstacles, curandState* localState) {
 
     Point p;
@@ -612,7 +601,7 @@ __global__ void kernel_mutateFlat(Population* P, Population* Q, Obstacle* obstac
     
     // no mutation
     if (mutate_pointset[ps_id] == 0 || cuda_randomChoice(1 - POINT_MUTATION_PROB, &localState)) {
-        *q = *p;        
+        *p = *q;        
     }
     // mix
     else if (mutate_pointset[ps_id] == 1) {
@@ -626,42 +615,33 @@ __global__ void kernel_mutateFlat(Population* P, Population* Q, Obstacle* obstac
 
 // Q = mutation of the X% best portion of P
 // llegeix de P, escriu a Q
-void mutate(Population** gpu_P, Population** gpu_Q) {
-    
+void mutate(Population* gpu_P, Population* gpu_Q) {
     tic(&mutationTime);
-
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-            
+    
+    bool flat = false;
+    if (flat) {
         int n_threads = 32; //sqrt(1024)
         int width = N / n_threads;
         int height = N_POINTS / n_threads;
-
+        // kernel
         dim3 gridSize(width, height, 1);
         dim3 blockSize(n_threads, n_threads, 1);
-        /*
-        kernel_mutateFlat<<<gridSize, blockSize>>>(gpu_P[GPU_X], 
-                                                   gpu_Q[GPU_X], 
-                                                   gpu_obstacles[GPU_X], 
-                                                   devStates[GPU_X]);
-        */
-        kernel_mutate<<<nBlocks, nThreads>>>(gpu_P[GPU_X], gpu_Q[GPU_X], 
-                                             gpu_obstacles[GPU_X], devStates[GPU_X]);
-        
-        
+        kernel_mutateFlat<<<gridSize, blockSize>>>(gpu_P, gpu_Q, gpu_obstacles, devStates);
         checkCudaError((char *) "kernel call in mutate");
+        cudaDeviceSynchronize();
     }
-    ForEachGPU { 
-        cudaSetDevice(GPU_X);
-        cudaDeviceSynchronize(); 
+    else {
+        // kernel 
+        kernel_mutate<<<nBlocks, nThreads>>>(gpu_P, gpu_Q, gpu_obstacles, devStates);
+        checkCudaError((char *) "kernel call in mutate");
+        cudaDeviceSynchronize();
     }
-    
     toc(&mutationTime);
 }
 
-void dump(PointSet** C) {
+void dump(PointSet* C) {
     for (int i = 0; i < N_POINTS; ++i) {
-        printf("%f %f %f\n", C[bestGPU]->points[i].x, C[bestGPU]->points[i].y, C[bestGPU]->points[i].z);
+        printf("%f %f %f\n", C->points[i].x, C->points[i].y, C->points[i].z);
     }
 }
 
@@ -696,27 +676,83 @@ __global__ void kernel_reproduce(Population* P, Population* Q, int* idxs,
     }
 }
 
-void reproduce(Population** gpu_P, Population** gpu_Q, int** gpu_idxs) {
-    tic(&reproductionTime);
+__global__ void kernel_reproduceFlat(Population* P, Population* Q, int* idxs, 
+                                                        curandState* state) {
+    
+    int ps_id = blockIdx.x * blockDim.x + threadIdx.x;
+    int point_id = blockIdx.y * blockDim.y + threadIdx.y;
+    __shared__ int parents[(N - N_SURVIVORS) * 2];
+    
+    PointSet* AP = &P->pointSets[ps_id];    // original points
+    PointSet* AQ = &Q->pointSets[ps_id];    // mutated points    
+    
+    Point* p = &(AP->points[point_id]);    // original
+    Point* q = &(AQ->points[point_id]);    // mutated point
+    
+    
+    int idxid = idxs[ps_id];
+    if (idxid < N_SURVIVORS) {
+        *q = *p;
+    }
+    else {
+        curandState localState = state[ps_id*N_POINTS + point_id];
+        if (point_id == 0) {
+            parents[(idxid - N_SURVIVORS) * 2] = idxs[(unsigned int) (CURAND*(N_SURVIVORS-1))];
+            parents[(idxid - N_SURVIVORS) * 2 + 1] = idxs[(unsigned int) (CURAND*(N_SURVIVORS-1))];
+        }
+        __syncthreads();
+        int parent_idx = (idxid - N_SURVIVORS) * 2;
+        
+        if (cuda_randomChoice(0.5, &localState)) {
+            parent_idx += 1;            
+        }
+//         int parent_ps = parents[parent_idx];
+//         if (parent_idx > (N-N_SURVIVORS)*2) {
+//             printf("parent index out of range\n");
+//         }
+//         if (parent_ps > N) {
+//             printf("pointset index out of range!\n");
+//         }
+//         if (point_id > N_POINTS) {
+//         
+//             printf("point index out of range");
+//         }
+//         PointSet* test = &P->pointSets[parent_ps];
+//         Point* p = &test->points[point_id];
+//         *q = *p;
+//         *q = P->pointSets[parent_ps].points[point_id];
+        *q = P->pointSets[parents[parent_idx]].points[point_id];
+    }
+}
 
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        // kernel 
-        kernel_reproduce<<<nBlocks, nThreads>>>(gpu_P[GPU_X], gpu_Q[GPU_X], 
-                                                gpu_idxs[GPU_X], devStates[GPU_X]);
-        checkCudaError((char *) "kernel call in mutate");
+void reproduce(Population* gpu_P, Population* gpu_Q, int* gpu_idxs) {
+    tic(&reproductionTime);
+    
+    bool flat = false;
+    if (flat) {
+        int n_threads = 32; //sqrt(1024)
+        int width = N / n_threads;
+        int height = N_POINTS / n_threads;
+        // kernel
+        dim3 gridSize(width, height, 1);
+        dim3 blockSize(n_threads, n_threads, 1);
+        kernel_reproduceFlat<<<gridSize, blockSize>>>(gpu_P, gpu_Q, gpu_idxs, devStates);
+        checkCudaError((char *) "kernel call in reproduce");   
     }
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaDeviceSynchronize();        
+    else {
+        kernel_reproduce<<<nBlocks, nThreads>>>(gpu_P, gpu_Q, gpu_idxs, devStates);
+        checkCudaError((char *) "kernel call in reproduce");   
     }
+    
+    cudaDeviceSynchronize();
+    
     toc(&reproductionTime);
 }
 
 void DUMPInitialParams() {
     printf("%i\n", N_OBSTACLES);
     for (int i = 0; i < N_OBSTACLES; ++i) {
-        Obstacle o = obstacles[i];
+        Obstacle o = cpu_obstacles[i];
         printf("%f %f %f %f\n", o.centre.x, o.centre.y, o.centre.z, o.radius); 
     }
     printf("%i %i\n", N_POINTS, ITERATION_LIMIT);
@@ -738,146 +774,85 @@ void printTimes() {
 }
 
 void initObstacles() {    
-    
     for (int i = 0; i < 3; ++i) {
         for (int j = 0; j < 3; ++j) {
             for (int k = 0; k < 3; ++k) {
                 Point origin;
+                
                 origin.x = 3*i;
                 origin.y = 3*j;
                 origin.z = 3*k;
 
-                obstacles[i*9 + j*3 + k].centre = origin;
-                obstacles[i*9 + j*3 + k].radius = 1.0;
+                cpu_obstacles[i*9 + j*3 + k].centre = origin;
+                cpu_obstacles[i*9 + j*3 + k].radius = 1.0;
             }
         }
     }
-    
-    gpu_obstacles = (Obstacle**) malloc(nGPUs*sizeof(Obstacle*));
-    
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaMalloc(&gpu_obstacles[GPU_X], sizeof(Obstacle)*N_OBSTACLES);
-        cudaMemcpy(gpu_obstacles[GPU_X], obstacles, sizeof(Obstacle)*N_OBSTACLES, cudaMemcpyHostToDevice);
-        checkCudaError((char *) "host -> gpu obstacles");
-    }
 
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaDeviceSynchronize();
-    }
+    cudaMalloc(&gpu_obstacles, sizeof(Obstacle)*N_OBSTACLES);
+    //cudaMemcpy(gpu_obstacles, cpu_obstacles, sizeof(Obstacle)*N_OBSTACLES, cudaMemcpyHostToDevice);
+    checkCudaError((char *) "host -> gpu obstacles");
+    
+    cudaDeviceSynchronize();
 }
 
 void initDestinationPoint() {
     
     destination.x = destination.y = destination.z = 0.0;   
     
-    gpu_destination = (Point**) malloc(nGPUs*sizeof(Point*));
+    // malloc
+    cudaMalloc(&gpu_destination, sizeof(Point));
+    checkCudaError((char *) "cudaMalloc in initDestinationPoint");
     
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        // malloc
-        cudaMalloc(&gpu_destination[GPU_X], sizeof(Point));
-        checkCudaError((char *) "cudaMalloc in initDestinationPoint");
-        
-        // copy    
-        cudaMemcpy(gpu_destination[GPU_X], &destination, sizeof(Point), cudaMemcpyHostToDevice);
-        checkCudaError((char *) "host -> gpu in initDestinationPoint");
-    }
-    
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaDeviceSynchronize();
-    }
-}
-
-void randomSetup() {
-    srand(SEED);    
-    seeds = (int*) malloc(nGPUs*sizeof(int));
-    ForEachGPU {
-        seeds[GPU_X] = rand();
-    }
-
-    devStates = (curandState**) malloc(nGPUs*sizeof(curandState*));
-    
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaMalloc((void **)&devStates[GPU_X], N * sizeof(curandState));
-        setup_kernel<<<nBlocks, nThreads>>>(devStates[GPU_X], seeds[GPU_X]);
-        checkCudaError((char *) "setup random kernel");    
-        
-    }
-    ForEachGPU {
-        cudaSetDevice(GPU_X);
-        cudaDeviceSynchronize();
-    }
+    // copy    
+    cudaMemcpy(gpu_destination, &destination, sizeof(Point), cudaMemcpyHostToDevice);
+    checkCudaError((char *) "host -> gpu in initDestinationPoint");
 }
 
 void cudaGenetic() {
+    srand(SEED);  
     
-    if (MULTI_GPU)
-        cudaGetDeviceCount(&nGPUs);
-    else 
-        nGPUs = 1;
-    
-
-    randomSetup();    
     initObstacles(); 
+    return;
     initDestinationPoint();
     
-    if (!DUMP) printf("Using %i GPUs.\n", nGPUs);
-    
-    tic(&totalTime);
-    
-    Population** gpu_P = (Population**) malloc(nGPUs*sizeof(Population*));
-    Population** gpu_Q = (Population**) malloc(nGPUs*sizeof(Population*));
-
-    PointSet** bestPointSets = (PointSet**) malloc(nGPUs*sizeof(PointSet*));
-    
-    int** gpu_idxs = (int**) malloc(nGPUs*sizeof(int*));
+    tic(&totalTime);   
     
     // Malloc
-    ForEachGPU {    
-        cudaSetDevice(GPU_X);
-        cudaMalloc((void **) &gpu_P[GPU_X], sizeof(Population));
-        checkCudaError((char *) "cudaMalloc of P");
-        
-        cudaMalloc((void **) &gpu_Q[GPU_X], sizeof(Population));
-        checkCudaError((char *) "cudaMalloc of Q");    
+    Population* gpu_P;
+    Population* gpu_Q;
+    cudaMalloc((void **) &gpu_P, sizeof(Population));
+    checkCudaError((char *) "cudaMalloc of P");
+    cudaMalloc((void **) &gpu_Q, sizeof(Population));
+    checkCudaError((char *) "cudaMalloc of Q");    
     
-        cudaMalloc((void **) &gpu_idxs[GPU_X], sizeof(int)*N);
-        checkCudaError((char *) "cudaMalloc of idxs"); 
-        
-        bestPointSets[GPU_X] = (PointSet*) malloc(sizeof(PointSet));   
-        
-        // Prepare CDP for the max depth 'MAX_DEPTH'.
-        cudaDeviceSetLimit(cudaLimitDevRuntimeSyncDepth, MAX_DEPTH);
-    }
+    int* gpu_idxs;
+    cudaMalloc((void **) &gpu_idxs, sizeof(int)*N);
+    checkCudaError((char *) "cudaMalloc of idxs"); 
     
+    PointSet* bestPointSet = (PointSet*) malloc(sizeof(PointSet));
+
     if (DUMP) DUMPInitialParams();
     else initTimes();
-     
+    
     generateInitialPopulation(gpu_P, gpu_idxs);
-      
+    
     int it = 0;
     while (true) {
-
         mutate(gpu_P, gpu_Q);
         
         evaluate(gpu_Q);
         
-        sort(gpu_Q, gpu_idxs, bestPointSets);
+        sort(gpu_Q, gpu_idxs, bestPointSet);
         
-        if (DUMP) dump(bestPointSets);
+        if (DUMP) dump(bestPointSet);
         else {            
-            printf("It: %i/%i Score: %f -> %f Best GPU: %i\n\n", 
-                   it, ITERATION_LIMIT, bestPointSets[bestGPU]->score, GOAL_SCORE, bestGPU);
+            printf("\nIt: %i/%i Score: %f -> %f\n", 
+                   it, ITERATION_LIMIT, bestPointSet->score, GOAL_SCORE);
         }
         
-        if (it >= ITERATION_LIMIT)  
+        if (it >= ITERATION_LIMIT || bestPointSet->score <= GOAL_SCORE) 
             break;
-
-        //////////////////////////////////////////////////       // bestPointSet->score <= GOAL_SCORE)
         
         // reproduce replaces the worst candidates with combinations
         // of better ones. from Q to P, so the population ends up in P
@@ -893,6 +868,7 @@ void cudaGenetic() {
 }
 
 int main(int argc, char** argv) {
+    DUMP = (argc == 1);
     cudaGenetic();
     return 0;
 }

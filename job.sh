@@ -5,8 +5,8 @@
 # Asegurar que el job mantiene las variables de entorno del shell lamador
 #$ -V
 # Cambiar el nombre del job
-#$ -N GENPAR 
+#$ -N XGENPAR 
 # Cambiar el shell
 #$ -S /bin/bash
 
-./geneticCUDA 1
+./genetic_par 1

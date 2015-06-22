@@ -36,19 +36,29 @@ cuda.o: genetic.cu
 cuda:	cuda.o
 	$(NVCC) cuda.o -o geneticCUDA $(LD_FLAGS)
 
-cuda_mgpu.o: gnetic_mgpu.cu
+genetic_mgpu.o: genetic_mgpu.cu
 	$(NVCC) -c -o $@ genetic_mgpu.cu $(NVCC_FLAGS)
 
-cuda_mgpu: genetic_mgpu.cu
+genetic_mgpu: genetic_mgpu.o
 	$(NVCC) genetic_mgpu.o -o genetic_mgpu $(LD_FLAGS)
 
 sub:	cuda
 	rm -f SESION*
 	qsub -l cuda job.sh && watch -n 0.5 qstat
 
-sub_mgpu:	cuda_mgpu
+sub_mgpu:	genetic_mgpu
 	rm -f SESION*
-	qsub -l cuda_mgpu job.sh
+	qsub -l cuda job_mgpu.sh && watch -n 0.5 qstat
 
 subseq: genetic
 	qsub -l cuda jobseq.sh && watch -n 0.5 qstat
+
+genetic_par.o: genetic_par.cu
+	$(NVCC) -c -o $@ genetic_par.cu $(NVCC_FLAGS)
+
+genetic_par: genetic_par.o
+	$(NVCC) genetic_par.o -o genetic_par $(LD_FLAGS)
+
+sub_par: genetic_par
+	rm -f SESION*
+	qsub -l cuda job.sh && watch -n 0.5 qstat
